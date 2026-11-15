@@ -1,34 +1,18 @@
 // 거점 ID를 지금 월드 카탈로그의 종착 거점으로 푸는 캐시. SDK 함수는 밖에서 넣는다(테스트에서 바꿔 끼움).
 // world.getPois는 같은 종착 ID를 한 번만 넣고 없는 ID를 빼므로 입력과 결과의 순서가 맞지 않는다.
-// 그래서 ID마다 world.getPoi로 하나씩 푼다.
-
-const RETRY_DELAY_MS = 300;
-const MAX_RETRIES = 5;
-
-const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+// 그래서 ID마다 world.getPoi로 하나씩 푼다(getPoi는 참고 데이터 읽기 상한에 들지 않는다).
 
 /**
  * @param {(poiId: string) => Promise<{ poiId: string, name: string } | null>} getPoi
  */
-export function createResolver(getPoi, { delay = wait } = {}) {
+export function createResolver(getPoi) {
   /** poiId → { poiId, name } | null(지금 카탈로그에 없음) */
   let cache = new Map();
   let generation = 0;
 
   async function lookup(poiId) {
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        const poi = await getPoi(poiId);
-        return poi && typeof poi.poiId === 'string' ? { poiId: poi.poiId, name: typeof poi.name === 'string' ? poi.name : '' } : null;
-      } catch (error) {
-        const code = error && typeof error === 'object' ? error.code : null;
-        if ((code === 'request.rateLimited' || code === 'host.timeout') && attempt < MAX_RETRIES) {
-          await delay(RETRY_DELAY_MS * (attempt + 1));
-          continue;
-        }
-        throw error;
-      }
-    }
+    const poi = await getPoi(poiId);
+    return poi && typeof poi.poiId === 'string' ? { poiId: poi.poiId, name: typeof poi.name === 'string' ? poi.name : '' } : null;
   }
 
   return {

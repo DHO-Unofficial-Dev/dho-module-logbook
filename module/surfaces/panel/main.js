@@ -63,21 +63,18 @@ function renderCurrent() {
   const line = els.current;
   line.replaceChildren();
   const metrics = metricsFromVoyage(voyageSnapshot, (value) => geo.mapSpeedToKnots(value));
-  const sameVoyage = metrics && current && (current.voyageId === metrics.voyageId || (current.voyageId === null
-    && metrics.startedAt !== null && current.departedAt !== null && metrics.startedAt >= current.departedAt - 60_000));
+  // 값은 voyageId로 묶는다. 다른 항차의 snapshot 값은 쓰지 않는다.
+  const sameVoyage = metrics && current && current.voyageId === metrics.voyageId;
   if (!current) {
-    const underway = voyageSnapshot && voyageSnapshot.state === 'underway';
-    line.textContent = underway ? '항해 중 · 출발 항구를 확인하지 못해 다음 출항부터 기록합니다' : '정박 중 · 항구를 떠나면 기록을 시작합니다';
+    line.textContent = '항차 정보를 기다리는 중 · 게임을 연결하고 항구를 떠나면 기록을 시작합니다';
     return;
   }
-  const parts = [];
-  if (current.endingSince !== null) parts.push('항차 끝남 · 입항 확인 중');
-  else parts.push('항해 중');
-  const route = el('b', null, `${nameOf(current.from, UNKNOWN_DEPARTURE)} → ?`);
+  const parts = [current.to ? '입항 · 다음 출항 때 확정' : '항해 중'];
+  const route = el('b', null, `${nameOf(current.from, UNKNOWN_DEPARTURE)} → ${current.to ? nameOf(current.to, UNKNOWN_PLACE) : '?'}`);
   const days = sameVoyage && metrics.sailingDays !== null ? metrics.sailingDays : current.metrics?.sailingDays ?? null;
   const knots = sameVoyage && metrics.knots !== null ? metrics.knots : current.metrics?.knots ?? null;
   const tail = [];
-  if (days !== null) tail.push(`${Math.round(days)}일째`);
+  if (days !== null) tail.push(current.to ? formatDays(days) : `${Math.round(days)}일째`);
   if (knots !== null) tail.push(`평균 ${formatKnots(knots)}`);
   if (voyageSnapshot && voyageSnapshot.trackingQuality !== 'tracking') tail.push('판독 대기');
   line.append(`${parts.join(' · ')} · `, route);
@@ -111,6 +108,7 @@ function renderRows() {
     row.append(el('td', null, formatShortDate(record.arrivedAt)));
     const route = el('td', null, `${nameOf(record.from, UNKNOWN_DEPARTURE)} → `);
     route.append(el('span', record.to ? null : 'vl-mute', nameOf(record.to, UNKNOWN_PLACE)));
+    if (!record.final) route.append(el('span', 'vl-mute', ' (확정 전)'));
     row.append(route);
     row.append(el('td', 'vl-num', formatDays(record.sailingDays)));
     row.append(el('td', 'vl-num', formatKnots(record.knots)));

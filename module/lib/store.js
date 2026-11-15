@@ -2,6 +2,7 @@
 
 export const RECORDS_KEY = 'records';
 export const CURRENT_KEY = 'current';
+export const PENDING_KEY = 'pendingDeparture';
 
 const MAX_ATTEMPTS = 5;
 

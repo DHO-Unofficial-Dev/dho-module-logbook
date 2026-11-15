@@ -1,5 +1,5 @@
 // background service: 패널을 닫아 둬도 항차를 기록한다.
-// 이벤트(shore.departed·voyage.started·shore.arrived·voyage.ended)를 받아 storage에 남기고 도착 toast를 띄운다.
+// 이벤트(voyage.ended·voyage.started·shore.departed·shore.arrived)와 voyage snapshot을 받아 storage에 남기고 도착 toast를 띄운다.
 import { events, geo, notifications, settings, storage, voyage, world } from '@dho/sdk';
 
 import { EVENT_KINDS, createRecorder } from '../lib/recorder.js';
@@ -32,12 +32,12 @@ stops.push(await settings.subscribe(applySettings));
 // 이벤트를 먼저 구독해 시작 정리 중에 생긴 이벤트도 놓치지 않는다(처리는 recorder 안에서 순서대로).
 stops.push(await events.subscribe(EVENT_KINDS, (event) => { void recorder.event(event); }));
 
-const [initial, voyageSnapshot, recentDeparture] = await Promise.all([
+// Navigator를 다시 켜면 voyage.started 없이 저장된 항차를 이어 가므로 지금 항차는 snapshot으로 읽는다.
+const [initial, voyageSnapshot] = await Promise.all([
   storage.getSnapshot(),
   voyage.getSnapshot().catch(() => null),
-  events.getRecent('shore.departed').catch(() => null),
 ]);
-await recorder.start({ values: initial.values, voyage: voyageSnapshot, recentDeparture });
+await recorder.start({ values: initial.values, voyage: voyageSnapshot });
 
 stops.push(await voyage.subscribe((snapshot) => { void recorder.voyage(snapshot); }));
 stops.push(await storage.subscribe((snapshot) => {
