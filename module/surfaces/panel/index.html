@@ -1,0 +1,45 @@
+<main class="vl" data-state="loading">
+  <header class="vl-head">
+    <h1 class="vl-title">항차 기록</h1>
+    <span class="vl-count" id="count"></span>
+  </header>
+
+  <section class="vl-current" aria-labelledby="current-label">
+    <h2 class="vl-label" id="current-label">현재 항차</h2>
+    <p class="vl-current__line" id="current">불러오는 중</p>
+  </section>
+
+  <section class="vl-compare" aria-labelledby="compare-label">
+    <h2 class="vl-label" id="compare-label">같은 구간 비교</h2>
+    <ul class="vl-compare__list" id="compare"></ul>
+    <p class="vl-empty" id="compare-empty">같은 구간을 두 번 이상 다니면 여기에 최고·평균 기록이 나옵니다.</p>
+  </section>
+
+  <section class="vl-records" aria-labelledby="records-label">
+    <h2 class="vl-label" id="records-label">기록</h2>
+    <div class="vl-table-wrap">
+      <table class="vl-table">
+        <thead>
+          <tr>
+            <th scope="col">날짜</th>
+            <th scope="col">구간</th>
+            <th scope="col" class="vl-num">일수</th>
+            <th scope="col" class="vl-num">평균 속도</th>
+            <th scope="col" class="vl-num">비교</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <p class="vl-empty" id="records-empty">아직 기록이 없습니다. 항구를 떠나 다른 항구에 들어가면 한 항차가 기록됩니다.</p>
+  </section>
+
+  <footer class="vl-foot">
+    <p class="vl-note">입항·출항은 화면 판독 추정이라 바다에서 끝난 항차는 "도착지 모름"으로 남습니다.</p>
+    <div class="vl-actions">
+      <button type="button" class="vl-button" id="export">CSV 내보내기</button>
+      <button type="button" class="vl-button vl-button--danger" id="clear">기록 지우기</button>
+    </div>
+    <p class="vl-status" id="status" role="status"></p>
+  </footer>
+</main>

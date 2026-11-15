@@ -1,0 +1,56 @@
+{
+  "formatVersion": 1,
+  "moduleId": "dev.dho-unofficial.voyage-log",
+  "name": "항차 기록",
+  "version": "1.0.0",
+  "description": "항차마다 출발·도착 항구, 항해일수, 평균 속도를 기록하고 같은 구간의 지난 기록과 비교합니다. 도착하면 게임 화면에 짧은 알림을 띄웁니다. 기록은 이 PC에만 남습니다.",
+  "publisher": {
+    "id": "dev.dho-unofficial",
+    "name": "DHO Unofficial Dev"
+  },
+  "license": "MIT",
+  "minimumManagerVersion": "2.2.0",
+  "sdkVersion": "1",
+  "dockIcon": "assets/dock-icon.svg",
+  "capabilities": [
+    "files.user",
+    "navigation.read",
+    "notifications.show",
+    "service.background",
+    "settings.read",
+    "storage.local"
+  ],
+  "settings": {
+    "schemaVersion": 1,
+    "fields": [
+      {
+        "id": "arrival-toast",
+        "type": "checkbox",
+        "label": "도착 알림",
+        "description": "항구에 들어가면 게임 화면에 구간·항해일수·지난 평균과의 차이를 짧게 띄웁니다. 소리는 내지 않습니다.",
+        "default": true
+      }
+    ]
+  },
+  "service": {
+    "serviceId": "recorder",
+    "label": "항차 기록",
+    "entry": "services/recorder.js"
+  },
+  "surfaces": [
+    {
+      "surfaceId": "module.dev.dho-unofficial.voyage-log.panel",
+      "name": "panel",
+      "label": "항차 기록",
+      "contractVersion": 1,
+      "presentation": "panel",
+      "preferredSize": {
+        "width": 520,
+        "height": 640
+      },
+      "html": "surfaces/panel/index.html",
+      "css": "surfaces/panel/main.css",
+      "entry": "surfaces/panel/main.js"
+    }
+  ]
+}

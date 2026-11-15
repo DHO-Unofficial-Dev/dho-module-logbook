@@ -1,0 +1,96 @@
+# 항차 기록
+
+DHO Navigator 2.2.0용 Module입니다. 항차마다 출발·도착 항구, 걸린 항해일수, 평균 속도와 날짜를 기록하고
+같은 구간(출발·도착 거점이 같은 항차)의 지난 기록과 비교합니다.
+
+- Navigator 본창의 Module 화면에서 "항차 기록" 패널을 엽니다. 패널을 닫아 둬도 background service가 계속 기록합니다.
+- 패널에는 현재 항차, 같은 구간 비교(최고·평균·횟수), 기록 표(날짜·구간·일수·평균 속도·이번 차이)가 나옵니다.
+- 항구에 들어가면 게임 화면에 짧은 도착 알림을 띄웁니다(예: "런던 도착 · 11일 / 리스본 → 런던 · 평균 8.4 kn /
+  지난 평균보다 0.5일 느림"). 소리는 내지 않습니다. HUD를 꺼 두면 게임 화면에는 뜨지 않고 본창 알림 목록에만 남습니다.
+- 기록은 최근 500항차까지 이 PC에만 저장합니다. 네트워크 권한이 없어 기록이 밖으로 나가지 않습니다.
+
+## 설치
+
+1. [Releases](../../releases)에서 `dho-module-voyage-log-<버전>.dho-module`을 받습니다.
+2. DHO Navigator 로고 › 도구 서랍 › 모듈 설치·관리 › 모듈 설치에서 받은 파일을 고릅니다.
+3. 설치 화면에서 권한을 확인합니다.
+
+| 권한 | 쓰는 곳 |
+| --- | --- |
+| `navigation.read` | 출항·입항·항차 시작·끝 이벤트, 항해일수·이동 거리, 거점 이름 읽기 |
+| `service.background` | 패널을 닫아 둬도 기록하는 background service |
+| `storage.local` | 기록과 지금 항차 저장 |
+| `notifications.show` | 도착 알림 |
+| `settings.read` | 도착 알림 켜기·끄기 설정 읽기 |
+| `files.user` | 기록을 CSV 파일로 내보내기(누를 때마다 저장 위치를 고릅니다) |
+
+## 설정
+
+모듈 설치·관리에서 이 Module의 설정을 엽니다.
+
+| 항목 | 기본 | 내용 |
+| --- | --- | --- |
+| 도착 알림 | 켬 | 항구에 들어가면 게임 화면에 구간·항해일수·지난 평균과의 차이를 짧게 띄웁니다. |
+
+## 기록 규칙
+
+- 한 항차는 출항(`shore.departed`)부터 입항(`shore.arrived`)까지입니다. 출발·도착 거점은 Navigator가 추정한 가장
+  가까운 거점입니다.
+- 입항·출항은 측량 표시가 사라지고 다시 나타나는 것을 보고 추정하므로 확정 신호가 아닙니다. 항차가 바다에서
+  끝나면(`voyage.ended` 뒤 몇 초 안에 입항이 없으면) "도착지 모름"으로 남습니다. 도착지 모름 기록은 구간 비교에 넣지 않습니다.
+- 항해일수는 게임 화면에 보이는 항해일수의 마지막 값입니다. 평균 속도는 판독한 이동 거리 ÷ 걸린 시간이며, 판독이
+  30초 넘게 끊긴 구간은 거리에 들어가지 않아 실제보다 조금 낮게 나올 수 있습니다.
+- 같은 구간 비교에서 최고는 가장 적은 항해일수입니다. 표의 "비교"는 그 항차보다 앞선 같은 구간 기록의 평균과의 차이이며,
+  처음 다닌 구간은 "첫 기록"입니다.
+- 거점이 월드 카탈로그 갱신으로 다른 거점에 통합되면 새 거점으로 묶어 비교합니다. 기록에는 기록할 때의 거점 ID와 이름이 남습니다.
+- 기록 지우기는 두 번 눌러야 합니다. 지금 항해 중인 항차는 지우지 않습니다.
+- CSV는 엑셀에서 바로 열리도록 UTF-8(BOM 포함)으로 저장합니다. 열은 도착 시각, 출발 시각, 출발 거점 ID, 출발,
+  도착 거점 ID, 도착, 항해일수, 평균 속도(kn)입니다.
+
+## 개발
+
+필요한 것: Node.js 20.11.1 이상, DHO Module 공개 Node 도구(`dho-module-node-tools.zip`).
+
+DHO Navigator 2.2.0 정식 공개 전(베타 기간)에는 아래 `latest` 주소에 도구가 없거나 베타 계약과 다를 수 있습니다.
+그때는 쓰는 Navigator 버전의 Release에 올라온 도구를 받습니다.
+
+```sh
+# 1. 공개 도구를 받아 저장소 밖이나 .tools/에 풉니다.
+curl -fsSL -o dho-module-node-tools.zip \
+  https://github.com/DHO-Unofficial-Dev/DHO-Manager/releases/latest/download/dho-module-node-tools.zip
+unzip -q dho-module-node-tools.zip -d .tools
+
+# 2. 로직 검사
+npm test
+
+# 3. 검증, 빌드, archive 검사
+node .tools/tools/validate-module.mjs module
+node .tools/tools/build-module.mjs module dist/dho-module-voyage-log-1.0.0.dho-module
+node .tools/tools/verify-module.mjs dist/dho-module-voyage-log-1.0.0.dho-module
+```
+
+각 명령은 한 줄 JSON을 출력하며 `status`가 `valid`면 통과입니다. 편집기 타입 지원이 필요하면 공개 도구의
+`sdk/index.d.ts`를 `.dho-sdk/index.d.ts`로 복사합니다(archive에는 넣지 않습니다). `v*` 태그를 push하면
+`.github/workflows/release.yml`이 같은 순서로 검사·빌드해 Release를 만듭니다.
+
+### 프로젝트 구조
+
+```text
+module/                  Module 프로젝트(이 폴더만 archive에 들어갑니다)
+  manifest.json
+  assets/dock-icon.svg
+  lib/log.js             항차 상태 전이, 기록·구간 비교, 표시 문구, CSV(순수 함수)
+  lib/recorder.js        이벤트 → 저장·도착 알림 처리(SDK 객체를 밖에서 받음)
+  lib/resolver.js        거점 ID → 지금 카탈로그의 종착 거점 캐시
+  lib/store.js           storage 충돌 재시도
+  services/recorder.js   background service(SDK 연결)
+  surfaces/panel/        패널 Surface
+test/logic.test.mjs      node --test 검사
+```
+
+공개 도구의 JavaScript import 검사기는 정규식 literal 안의 따옴표(예: `/[",]/`)를 문자열 시작으로 읽어
+`source.invalid`를 내므로 이 저장소는 그런 정규식을 쓰지 않습니다.
+
+## 라이선스
+
+MIT. [LICENSE](LICENSE)를 보세요.

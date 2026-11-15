@@ -1,0 +1,210 @@
+/* 항차 기록 패널. Host 스킨 토큰(--dho-host-*)을 쓰고, 없으면 짙은 네이비와 낮은 채도의 금색으로 그린다. */
+html,
+body {
+  margin: 0;
+  background-color: var(--dho-host-bg, #0b141d);
+}
+
+.vl {
+  --vl-bg: var(--dho-host-bg, #0b141d);
+  --vl-surface: var(--dho-host-surface, #111e2b);
+  --vl-ink: var(--dho-host-ink, #e3e9ee);
+  --vl-muted: var(--dho-host-muted, #8e9db0);
+  --vl-line: var(--dho-host-line, #23384a);
+  --vl-rule: var(--dho-host-rule, #1a2b3b);
+  --vl-accent: var(--dho-host-accent, #c9a557);
+  --vl-danger: var(--dho-host-danger, #d98a6a);
+  --vl-focus: var(--dho-host-focus, #e0c27a);
+  --vl-radius: var(--dho-host-radius, 6px);
+
+  box-sizing: border-box;
+  display: grid;
+  gap: 14px;
+  min-height: 100vh;
+  padding: 14px 16px 18px;
+  background: var(--vl-bg);
+  color: var(--vl-ink);
+  font-family: "Malgun Gothic", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.vl * {
+  box-sizing: border-box;
+}
+
+.vl [hidden] {
+  display: none;
+}
+
+.vl-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--vl-line);
+}
+
+.vl-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.vl-count {
+  color: var(--vl-muted);
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 11px;
+}
+
+.vl-label {
+  margin: 0 0 6px;
+  color: var(--vl-muted);
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+
+.vl-current__line {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--vl-accent);
+  border-radius: var(--vl-radius);
+  background: var(--vl-surface);
+}
+
+.vl-current__line b {
+  color: var(--vl-accent);
+  font-weight: 600;
+}
+
+.vl-compare__list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--vl-line);
+  border-radius: var(--vl-radius);
+  list-style: none;
+}
+
+.vl-compare__list:empty {
+  display: none;
+}
+
+.vl-compare__route {
+  font-weight: 600;
+}
+
+.vl-compare__stats {
+  color: var(--vl-muted);
+}
+
+.vl-empty {
+  margin: 0;
+  color: var(--vl-muted);
+}
+
+.vl-table-wrap {
+  overflow-x: auto;
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--vl-line);
+  border-radius: var(--vl-radius);
+}
+
+.vl-table {
+  width: 100%;
+  min-width: 380px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.vl-table th,
+.vl-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--vl-rule);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.vl-table th {
+  position: sticky;
+  top: 0;
+  background: var(--vl-surface);
+  color: var(--vl-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.vl-table .vl-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.vl-faster {
+  color: #7fc49c;
+}
+
+.vl-slower {
+  color: var(--vl-danger);
+}
+
+.vl-mute {
+  color: var(--vl-muted);
+}
+
+.vl-foot {
+  display: grid;
+  gap: 8px;
+}
+
+.vl-note {
+  margin: 0;
+  color: var(--vl-muted);
+  font-size: 12px;
+}
+
+.vl-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vl-button {
+  padding: 5px 12px;
+  border: 1px solid var(--vl-line);
+  border-radius: var(--vl-radius);
+  background: var(--vl-surface);
+  color: var(--vl-ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.vl-button:hover {
+  border-color: var(--vl-accent);
+}
+
+.vl-button:focus-visible {
+  outline: 2px solid var(--vl-focus);
+  outline-offset: 1px;
+}
+
+.vl-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.vl-button--danger[data-confirm="true"] {
+  border-color: var(--vl-danger);
+  color: var(--vl-danger);
+}
+
+.vl-status {
+  min-height: 1.5em;
+  margin: 0;
+  color: var(--vl-muted);
+  font-size: 12px;
+}
