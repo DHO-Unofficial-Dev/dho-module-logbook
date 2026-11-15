@@ -14,6 +14,8 @@
 export const MAX_RECORDS = 500;
 /** voyage.ended 뒤 shore.arrived를 기다리는 시간. 그 안에 입항이 오지 않으면 "도착지 모름"으로 닫는다. */
 export const END_GRACE_MS = 8000;
+/** 출항 이벤트와 항차 시작 시각의 허용 차이. */
+const ADOPT_SLACK_MS = 60_000;
 
 export function emptyState() {
   return { current: null, records: [], lastEventRevision: null };
@@ -197,7 +199,10 @@ export function resumeFromSnapshot(state, snapshot, recentDeparture = null, plac
   const useDeparture = departedAt !== null && startedAt !== null && departedAt >= startedAt - 60_000;
   const legId = `resume-${voyageId}`;
   const leg = openLeg(legId, voyageId, useDeparture ? place : null, useDeparture ? departedAt : startedAt, useDeparture);
-  return { state: { ...state, current: leg }, changed: true };
+  // 시작 중에 같은 출항 이벤트가 구독으로도 오면 다시 처리하지 않는다.
+  const seen = useDeparture ? finiteOrNull(recentDeparture.revision) : null;
+  const lastEventRevision = seen !== null && (state.lastEventRevision === null || seen > state.lastEventRevision) ? seen : state.lastEventRevision;
+  return { state: { ...state, current: leg, lastEventRevision }, changed: true };
 }
 
 /** voyage.ended 뒤 유예 시간이 지나도 입항이 없으면 "도착지 모름"으로 닫는다. */
@@ -217,6 +222,11 @@ export function updateMetrics(state, metrics) {
   if (!leg || !isObject(metrics)) return { state, changed: false };
   const voyageId = stringOrNull(metrics.voyageId);
   if (!voyageId || (leg.voyageId !== null && leg.voyageId !== voyageId)) return { state, changed: false };
+  if (leg.voyageId === null) {
+    // 출항으로 열린 항차는 그 뒤에 시작한 항차의 snapshot만 받아들인다(멈춰 있는 앞 항차 값을 가져오지 않게).
+    const startedAt = finiteOrNull(metrics.startedAt);
+    if (startedAt === null || leg.departedAt === null || startedAt < leg.departedAt - ADOPT_SLACK_MS) return { state, changed: false };
+  }
   const prev = leg.metrics ?? { voyageId: null, sailingDays: null, knots: null };
   const merged = {
     voyageId,
@@ -239,6 +249,8 @@ export function metricsFromVoyage(snapshot, toKnots) {
   if (!isObject(snapshot)) return null;
   const voyageId = stringOrNull(snapshot.voyageId);
   if (!voyageId) return null;
+  // 항해 중·일시 정지일 때만 쓴다. 멈춰 있는 snapshot에는 앞 항차 값이 남아 있을 수 있다.
+  if (snapshot.state !== 'underway' && snapshot.state !== 'paused') return null;
   const distance = finiteOrNull(snapshot.distanceTravelled);
   const elapsed = finiteOrNull(snapshot.elapsedMillis);
   let knots = null;
@@ -246,7 +258,7 @@ export function metricsFromVoyage(snapshot, toKnots) {
     const value = toKnots(distance / (elapsed / 1000));
     knots = finiteOrNull(value);
   }
-  return { voyageId, sailingDays: finiteOrNull(snapshot.lastSailingDays), knots };
+  return { voyageId, startedAt: finiteOrNull(snapshot.startedAtUnixMillis), sailingDays: finiteOrNull(snapshot.lastSailingDays), knots };
 }
 
 // ── 같은 구간 비교 ──

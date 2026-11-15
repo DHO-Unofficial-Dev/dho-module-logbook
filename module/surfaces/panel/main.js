@@ -63,7 +63,8 @@ function renderCurrent() {
   const line = els.current;
   line.replaceChildren();
   const metrics = metricsFromVoyage(voyageSnapshot, (value) => geo.mapSpeedToKnots(value));
-  const sameVoyage = metrics && current && (current.voyageId === null || current.voyageId === metrics.voyageId);
+  const sameVoyage = metrics && current && (current.voyageId === metrics.voyageId || (current.voyageId === null
+    && metrics.startedAt !== null && current.departedAt !== null && metrics.startedAt >= current.departedAt - 60_000));
   if (!current) {
     const underway = voyageSnapshot && voyageSnapshot.state === 'underway';
     line.textContent = underway ? '항해 중 · 출발 항구를 확인하지 못해 다음 출항부터 기록합니다' : '정박 중 · 항구를 떠나면 기록을 시작합니다';

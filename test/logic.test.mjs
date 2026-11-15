@@ -174,11 +174,32 @@ test('다른 항차의 voyage snapshot은 열린 항차 값을 바꾸지 않는�
 
 test('voyage snapshot에서 항해일수와 평균 속도를 고른다', () => {
   const toKnots = (unitsPerSecond) => unitsPerSecond * 2;
-  const metrics = metricsFromVoyage({ voyageId: 'v', lastSailingDays: 6, distanceTravelled: 300, elapsedMillis: 60_000 }, toKnots);
-  assert.deepEqual(metrics, { voyageId: 'v', sailingDays: 6, knots: 10 });
-  assert.equal(metricsFromVoyage({ voyageId: 'v', lastSailingDays: 1, distanceTravelled: 300, elapsedMillis: 2_000 }, toKnots).knots, null);
-  assert.equal(metricsFromVoyage({ voyageId: 'v', distanceTravelled: 300, elapsedMillis: 60_000 }, () => null).knots, null);
-  assert.equal(metricsFromVoyage({ voyageId: null }, toKnots), null);
+  const base = { voyageId: 'v', state: 'underway', startedAtUnixMillis: 7 };
+  const metrics = metricsFromVoyage({ ...base, lastSailingDays: 6, distanceTravelled: 300, elapsedMillis: 60_000 }, toKnots);
+  assert.deepEqual(metrics, { voyageId: 'v', startedAt: 7, sailingDays: 6, knots: 10 });
+  assert.equal(metricsFromVoyage({ ...base, lastSailingDays: 1, distanceTravelled: 300, elapsedMillis: 2_000 }, toKnots).knots, null);
+  assert.equal(metricsFromVoyage({ ...base, distanceTravelled: 300, elapsedMillis: 60_000 }, () => null).knots, null);
+  assert.equal(metricsFromVoyage({ ...base, voyageId: null }, toKnots), null);
+  // 멈춰 있는 snapshot은 쓰지 않는다.
+  assert.equal(metricsFromVoyage({ ...base, state: 'idle', lastSailingDays: 6 }, toKnots), null);
+});
+
+test('출항 뒤 멈춰 있는 앞 항차 snapshot이 와도 출발지를 잃지 않는다', () => {
+  let state = applyEvent(emptyState(), ev('shore.departed', { shoreContext: 'port', nearestPoiId: 'poi-lisbon' }, 100_000), LISBON).state;
+  // 앞 항차(old)의 값이 남은 snapshot: idle이면 metricsFromVoyage가 거르고, 시작 시각이 이르면 updateMetrics가 거른다.
+  assert.equal(metricsFromVoyage({ voyageId: 'old', state: 'idle', startedAtUnixMillis: 1_000, lastSailingDays: 11 }, (v) => v), null);
+  const stale = updateMetrics(state, { voyageId: 'old', startedAt: 1_000, sailingDays: 11, knots: 7 });
+  assert.equal(stale.changed, false);
+  state = applyEvent(state, ev('voyage.started', { voyageId: 'new' }, 101_000)).state;
+  state = updateMetrics(state, { voyageId: 'new', startedAt: 100_500, sailingDays: 4, knots: 9 }).state;
+  const result = applyEvent(state, ev('shore.arrived', { shoreContext: 'port', nearestPoiId: 'poi-london' }, 200_000), LONDON);
+  assert.equal(result.state.records.length, 1);
+  assert.deepEqual(result.state.records[0].from, LISBON);
+  assert.equal(result.state.records[0].voyageId, 'new');
+  assert.equal(result.state.records[0].sailingDays, 4);
+  // voyage.started 없이도 출항 뒤 시작한 항차 snapshot은 받아들인다.
+  const solo = applyEvent(emptyState(), ev('shore.departed', { shoreContext: 'port', nearestPoiId: 'poi-lisbon' }, 100_000), LISBON).state;
+  assert.equal(updateMetrics(solo, { voyageId: 'x', startedAt: 99_000, sailingDays: 1, knots: 5 }).changed, true);
 });
 
 test('service 재시작 때 항해 중이면 출발지를 모르는 항차로 다시 연다', () => {
@@ -186,9 +207,11 @@ test('service 재시작 때 항해 중이면 출발지를 모르는 항차로 �
   const plain = resumeFromSnapshot(emptyState(), snapshot);
   assert.equal(plain.changed, true);
   assert.equal(plain.state.current.from, null);
-  const departure = { occurredAtUnixMillis: 99_000, data: { nearestPoiId: 'poi-lisbon' } };
+  const departure = { revision: 42, occurredAtUnixMillis: 99_000, data: { nearestPoiId: 'poi-lisbon' } };
   const withDeparture = resumeFromSnapshot(emptyState(), snapshot, departure, LISBON);
   assert.deepEqual(withDeparture.state.current.from, LISBON);
+  // 같은 출항 이벤트가 구독으로 다시 와도 무시한다.
+  assert.equal(applyEvent(withDeparture.state, { ...departure, kind: 'shore.departed', eventId: 'd' }, LISBON).changed, false);
   const oldDeparture = { occurredAtUnixMillis: 1_000, data: { nearestPoiId: 'poi-lisbon' } };
   assert.equal(resumeFromSnapshot(emptyState(), snapshot, oldDeparture, LISBON).state.current.from, null);
   assert.equal(resumeFromSnapshot(emptyState(), { ...snapshot, state: 'idle' }).changed, false);
@@ -376,7 +399,7 @@ test('service 흐름: 이벤트 순서대로 저장하고 도착 toast에 지난
   await recorder.idle();
   assert.deepEqual(storage.values[CURRENT_KEY].from, LISBON);
   await recorder.event(ev('voyage.started', { voyageId: 'v9' }));
-  await recorder.voyage({ voyageId: 'v9', lastSailingDays: 11, distanceTravelled: 840, elapsedMillis: 100_000 });
+  await recorder.voyage({ voyageId: 'v9', state: 'underway', startedAtUnixMillis: 0, lastSailingDays: 11, distanceTravelled: 840, elapsedMillis: 100_000 });
   assert.equal(storage.values[CURRENT_KEY].metrics.sailingDays, 11);
   await recorder.event(ev('shore.arrived', { shoreContext: 'port', nearestPoiId: 'poi-london' }));
   assert.equal(storage.values[CURRENT_KEY], null);
