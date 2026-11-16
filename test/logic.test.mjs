@@ -18,6 +18,7 @@ import {
   formatTimeRange,
   includedInComparison,
   isDetour,
+  justDeparted,
   maxRegionVisits,
   nextCompareMode,
   recordSeason,
@@ -599,6 +600,42 @@ test('Navigator를 켠 직후 방금 끝난(입항해 멈춘) 앞 항차 snapsho
   assert.deepEqual(state.records[0].from, LISBON);
   assert.equal(state.records[0].fromEstimated, false);
   assert.deepEqual(state.records[0].to, LONDON);
+});
+
+test('출항 직후 첫 판독이 앞 항차 ID로 와도 출항은 다음 항차로 넘기고 앞 항차를 기록하지 않는다', () => {
+  revision = 0;
+  // 실기기 2026-11-16 21:18: 리스본 출항 뒤 앞 항차 ID가 underway로 먼저 오고 1초 뒤 새 항차로 바뀌었다.
+  const steps = [
+    snap('old', 2, { state: 'underway' }),
+    ev('shore.departed', { shoreContext: 'port', nearestPoiId: 'poi-lisbon' }, 20_000),
+    ev('voyage.ended', { voyageId: 'old' }, 21_000),
+    ev('voyage.started', { voyageId: 'new' }, 21_000),
+    snap('new', 0),
+    ev('shore.arrived', { shoreContext: 'port', nearestPoiId: 'poi-london' }, 80_000),
+  ];
+  const { state } = run(steps);
+  assert.equal(state.records.length, 1);
+  assert.equal(state.records[0].recordId, 'new');
+  assert.deepEqual(state.records[0].from, LISBON);
+  assert.equal(state.records[0].fromEstimated, false);
+  assert.equal(state.records[0].departedAt, 20_000);
+  // 같은 순서에서 snapshot이 이벤트보다 먼저 새 항차를 알려도 결과가 같다.
+  revision = 0;
+  const viaSnapshot = run([
+    snap('old', 2, { state: 'underway' }),
+    ev('shore.departed', { shoreContext: 'port', nearestPoiId: 'poi-lisbon' }, 20_000),
+    snap('new', 0, { emittedAtUnixMillis: 21_000 }),
+    ev('shore.arrived', { shoreContext: 'port', nearestPoiId: 'poi-london' }, 80_000),
+  ]).state;
+  assert.equal(viaSnapshot.records.length, 1);
+  assert.deepEqual(viaSnapshot.records[0].from, LISBON);
+  // 출항 뒤 1분이 넘도록 입항 없이 끝난 항차는 그대로 "도착지 모름"으로 남는다.
+  const stale = { openedBySnapshot: true, to: null, from: LISBON, fromEstimated: false, departedAt: 0 };
+  assert.equal(justDeparted(stale, 1_000), true);
+  assert.equal(justDeparted(stale, 61_000), false);
+  assert.equal(justDeparted({ ...stale, fromEstimated: true }, 1_000), false);
+  // voyage.started로 연(실제) 항차는 넘기지 않는다.
+  assert.equal(justDeparted({ ...stale, openedBySnapshot: false }, 1_000), false);
 });
 
 test('지나간 해역은 같은 해역 연속을 한 번으로 묶어 항차에 남는다', () => {

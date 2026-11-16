@@ -120,6 +120,7 @@ export function normalizeLeg(value) {
     voyageId,
     from: normalizePlace(value.from),
     fromEstimated: value.fromEstimated === true,
+    openedBySnapshot: value.openedBySnapshot === true,
     to: normalizePlace(value.to),
     straight: finiteOrNull(value.straight),
     departedAt: finiteOrNull(value.departedAt),
@@ -189,6 +190,20 @@ function openLeg(voyageId, pending, at) {
   };
 }
 
+/** 출항 판정을 받은 뒤 이 시간 안에 항차가 바뀌면 그 출항은 다음 항차 것이다. */
+export const DEPARTURE_HANDOFF_MS = 60_000;
+
+/**
+ * 앞 항차가 "방금 출항만 하고 끝났는지". 출항 뒤 첫 판독은 아직 앞 항차 ID를 달고 오고, 항해일수가 0으로 돌아온 판독에서야
+ * 새 항차로 바뀐다(실기기 2026-11-16: 리스본 출항 1초 뒤 바뀌어 "리스본 → 도착지 모름"이 남았다). 입항이 없고, 추정이 아닌
+ * 출항 판정을 받은 지 1분 안이면 그 출항을 다음 항차로 넘긴다.
+ */
+export function justDeparted(leg, at) {
+  // voyage.started로 연 항차는 실제 항차다. snapshot으로 연(앞 항차 ID가 남아 있던) 항차만 넘긴다.
+  return leg.openedBySnapshot === true && leg.to === null && leg.from !== null && leg.fromEstimated !== true
+    && leg.departedAt !== null && at - leg.departedAt >= 0 && at - leg.departedAt <= DEPARTURE_HANDOFF_MS;
+}
+
 /** 지나간 해역을 붙인다. 같은 해역이 연달아 오면 붙이지 않고, 오래된 것부터 버려 64개를 넘기지 않는다. */
 export function appendRegion(regions, visit) {
   const last = regions.at(-1);
@@ -252,6 +267,12 @@ export function applyEvent(state, event, place = null) {
   let arrived = false;
 
   const finish = (leg) => {
+    // 방금 출항 판정만 받은 앞 항차는 기록하지 않고 그 출항을 다음 항차로 넘긴다.
+    if (justDeparted(leg, at)) {
+      // 이미 더 새 출항이 기다리고 있으면 그것을 지킨다.
+      if (!pending || pending.at < leg.departedAt) pending = { from: leg.from, at: leg.departedAt };
+      return;
+    }
     // 그 항차의 마지막 입항이 있으면 그것을 확정하고, 없으면 도착지 모름으로 남긴다.
     upsert = legToRecord(leg, true, at);
     records = upsertRecord(records, upsert);
@@ -270,7 +291,8 @@ export function applyEvent(state, event, place = null) {
       const voyageId = stringOrNull(data.voyageId);
       if (!voyageId) break;
       if (current && current.voyageId === voyageId) {
-        // snapshot이 먼저 이 항차를 열었다. 먼저 온 출항이 있으면 붙인다.
+        // snapshot이 먼저 이 항차를 열었다. 이제 실제 항차로 확인됐다. 먼저 온 출항이 있으면 붙인다.
+        if (current.openedBySnapshot) current = { ...current, openedBySnapshot: false };
         if (pending && (current.from === null || (current.fromEstimated && pending.from)) && current.to === null) {
           current = { ...current, from: pending.from, fromEstimated: false, departedAt: pending.at };
           pending = null;
@@ -342,7 +364,9 @@ export function applyVoyage(state, snapshot, toKnots) {
     if (!known && snapshot.state !== undefined && snapshot.state !== 'underway') return none;
     // 사용자가 지운 뒤라도 같은 항차를 다시 열 뿐이다. 앞 항차는 확정한다.
     const at = finiteOrNull(snapshot.emittedAtUnixMillis) ?? 0;
-    if (current) {
+    if (current && justDeparted(current, at)) {
+      if (!pending || pending.at < current.departedAt) pending = { from: current.from, at: current.departedAt };
+    } else if (current) {
       upsert = legToRecord(current, true, at);
       records = upsertRecord(records, upsert);
     }
@@ -358,7 +382,7 @@ export function applyVoyage(state, snapshot, toKnots) {
         metrics: null,
         regions: known.regions ?? [],
       }
-      : openLeg(metrics.voyageId, pending, finiteOrNull(snapshot.startedAtUnixMillis) ?? at);
+      : { ...openLeg(metrics.voyageId, pending, finiteOrNull(snapshot.startedAtUnixMillis) ?? at), openedBySnapshot: true };
     if (!known) pending = null;
     switched = true;
   }
