@@ -52,6 +52,13 @@ body {
   font-weight: 600;
 }
 
+.vl-subtitle {
+  margin-left: 6px;
+  color: var(--vl-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
 .vl-count {
   color: var(--vl-muted);
   font-family: Consolas, "Cascadia Mono", monospace;
