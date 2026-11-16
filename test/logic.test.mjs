@@ -224,7 +224,7 @@ test('항차 없이 입항만 오면 기록하지 않고, 다른 항차 ended는
 });
 
 test('voyage snapshot에서 항해일수와 평균 속도를 고른다', () => {
-  assert.deepEqual(metricsFromVoyage(snap('v', 6, { distanceTravelled: 300, elapsedMillis: 60_000 }), (v) => v * 2), { voyageId: 'v', sailingDays: 6, knots: 10, distance: 300 });
+  assert.deepEqual(metricsFromVoyage(snap('v', 6, { distanceTravelled: 300, elapsedMillis: 60_000 }), (v) => v * 2), { voyageId: 'v', sailingDays: 6, knots: 10, distance: 300, elapsed: 60_000 });
   assert.equal(metricsFromVoyage(snap('v', 1, { elapsedMillis: 2_000 }), toKnots).knots, null);
   assert.equal(metricsFromVoyage(snap('v', 1), () => null).knots, null);
   assert.equal(metricsFromVoyage(snap(null, 1), toKnots), null);

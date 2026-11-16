@@ -87,7 +87,9 @@ function renderCurrent() {
   const parts = [current.to ? '입항 · 다음 출항 때 확정' : '항해 중'];
   const route = el('b', null, `${departureName(current)} → ${current.to ? nameOf(current.to, UNKNOWN_PLACE) : '?'}`);
   const days = sameVoyage && metrics.sailingDays !== null ? metrics.sailingDays : current.metrics?.sailingDays ?? null;
-  const knots = sameVoyage && metrics.knots !== null ? metrics.knots : current.metrics?.knots ?? null;
+  // 입출항 없이 이어 온 항차는 service가 거리·시간을 합쳐 잰 값(current.metrics)을 쓴다.
+  const carried = (current.carriedElapsed ?? 0) > 0 || (current.carriedDistance ?? 0) > 0;
+  const knots = sameVoyage && !carried && metrics.knots !== null ? metrics.knots : current.metrics?.knots ?? null;
   const tail = [];
   if (days !== null) tail.push(current.to ? formatDays(days) : `${Math.round(days)}일째`);
   if (knots !== null) tail.push(`평균 ${formatKnots(knots)}`);

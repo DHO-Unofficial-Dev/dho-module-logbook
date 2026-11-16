@@ -42,7 +42,7 @@ jobs:
       - name: 검증과 빌드
         run: |
           tools="$RUNNER_TEMP/dho-tools/tools"
-          out="dist/dho-module-voyage-log-${VERSION}.dho-module"
+          out="dist/logbook-${VERSION}.dho-module"
           mkdir -p dist
           node "$tools/validate-module.mjs" module
           node "$tools/build-module.mjs" module "$out"

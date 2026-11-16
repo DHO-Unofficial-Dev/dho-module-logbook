@@ -12,7 +12,7 @@
 
 ## 설치
 
-1. [Releases](../../releases)에서 `dho-module-voyage-log-<버전>.dho-module`을 받습니다.
+1. [Releases](../../releases)에서 `logbook-<버전>.dho-module`을 받습니다.
 2. DHO Navigator 로고 › 도구 서랍 › 모듈 설치·관리 › 모듈 설치에서 받은 파일을 고릅니다.
 3. 설치 화면에서 권한을 확인합니다.
 
@@ -40,7 +40,11 @@
 - 입항(`shore.arrived`)하면 그 항차를 바로 표에 "확정 전"으로 넣고 도착 알림을 띄웁니다. 다음 출항 때 확정합니다.
 - 출발지는 그 항차의 출항(`shore.departed`) 거점, 도착지는 그 항차 동안 받은 마지막 입항 거점입니다. 거점은 Navigator가
   추정한 가장 가까운 거점입니다. 입항·출항은 측량 표시가 사라지고 다시 나타나는 것을 보고 추정하므로 확정 신호가 아닙니다.
-- 입항 없이 끝난 항차(바다에서 새 항차를 시작했거나 입항 판정이 없었던 항차)는 "도착지 모름"으로 남고 구간 비교에 넣지 않습니다.
+- Navigator 항차는 측량 판독이 몇 초 끊겨도 바뀔 수 있습니다. 판독 끊김이 15초 이하이고 끊긴 지 30초 안에, 입항·출항 판정 없이 항차만 바뀌면
+  같은 뱃길로 보고 한 기록으로 이어 갑니다. 이동 거리·평균 속도는 이어 온 항차를 합쳐 잽니다. 입항 판정이 있었거나(거점을 모르는
+  상륙지 포함), 항해일수가 줄었거나, 판독이 정상인 채 바뀐 항차(바다에서 새 항차를 직접 시작)는 잇지 않습니다. 다만 판독이 끊긴
+  직후(30초 안)에 바다에서 새 항차를 직접 시작하면 앞 기록에 이어질 수 있습니다.
+- 입항 없이 끝난 항차(바다에서 새 항차를 직접 시작했거나 입항 판정이 없었던 항차)는 "도착지 모름"으로 남고 구간 비교에 넣지 않습니다.
 - 출항 판정 없이 시작한 항차(Navigator를 항구에서 켜고 바로 나간 경우 등)는 그 항차의 첫 측량 위치에서 120 안쪽의 가장 가까운
   도시(항구·개척도시)를 출발지로 추정하고 "(추정)"을 붙입니다. Navigator 입항 판정과 같은 거리·종류입니다. 첫 측량 위치가 항차를
   연 때보다 1분 넘게 늦거나 도시가 멀면 "출발지 모름"으로 둡니다. 나중에 출항 판정이 오면 그것으로 바꿉니다.
@@ -81,8 +85,8 @@ npm test
 
 # 3. 검증, 빌드, archive 검사
 node .tools/tools/validate-module.mjs module
-node .tools/tools/build-module.mjs module dist/dho-module-voyage-log-1.0.0.dho-module
-node .tools/tools/verify-module.mjs dist/dho-module-voyage-log-1.0.0.dho-module
+node .tools/tools/build-module.mjs module dist/logbook-1.0.0.dho-module
+node .tools/tools/verify-module.mjs dist/logbook-1.0.0.dho-module
 ```
 
 각 명령은 한 줄 JSON을 출력하며 `status`가 `valid`면 통과입니다. 편집기 타입 지원이 필요하면 공개 도구의

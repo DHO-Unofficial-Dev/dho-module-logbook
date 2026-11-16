@@ -1,13 +1,18 @@
 // 항차 기록의 순수 로직. SDK를 쓰지 않으므로 node --test로 바로 검사한다.
 //
 // 항차 경계는 Navigator의 voyageId를 따른다. 항차는 입항으로 끝나지 않고 다음 출항(또는 사용자가 새 항차를 직접
-// 시작)할 때 `voyage.ended` → `voyage.started`로 바뀐다. 그래서 기록은 voyageId 하나에 하나이며,
+// 시작)할 때 `voyage.ended` → `voyage.started`로 바뀐다. 기록은 보통 voyageId 하나에 하나이며,
 // 입항(`shore.arrived`) 때 바로 표에 넣고(도착지 = 그 항차의 마지막 입항) `voyage.ended` 때 확정한다.
+// 측량 판독이 잠깐 끊겨 입출항 없이 Navigator 항차만 바뀌면 같은 기록으로 잇는다(canContinueLeg). 그때 기록 ID(recordId)는
+// 처음 항차 것을 유지하고 voyageId는 지금 Navigator 항차를 따른다.
 //
 // 상태 모양: { current: Leg | null, pending: Departure | null, records: Record[], lastEventRevision: number | null }
 // Leg (지금 항차)
-//   { voyageId, from: Place | null, fromEstimated, to: Place | null, departedAt, arrivedAt, metrics: Metrics | null,
-//     regions: RegionVisit[] }
+//   { voyageId, recordId, from: Place | null, fromEstimated, to: Place | null, departedAt, arrivedAt, endedAt,
+//     metrics: Metrics | null, regions: RegionVisit[],
+//     carriedDistance, carriedElapsed,   이어 온 앞 Navigator 항차들의 거리·시간 합
+//     voyageDistance, voyageElapsed,     지금 Navigator 항차 하나의 판독값
+//     gapStartedAt, gapEndedAt }         마지막 판독 끊김 구간의 시작(처음 본 끊김)·끝(다시 본 정상 판독) 시각(잇기 판단)
 // Departure (voyage.started보다 먼저 온 출항. 다음 항차의 출발지가 된다)
 //   { from: Place | null, at }
 // Place
@@ -16,9 +21,9 @@
 //   { regionId, name, at }
 // Metrics (그 voyageId의 voyage snapshot에서 고른 마지막 값)
 //   { sailingDays, knots, distance }
-// Record (최신이 앞, recordId = voyageId)
+// Record (최신이 앞, recordId = 처음 항차 voyageId, voyageId = 마지막으로 이어 받은 항차)
 //   { recordId, voyageId, from, fromEstimated, to, sailingDays, knots, distance, straight, regions, compare,
-//     departedAt, arrivedAt, final }
+//     departedAt, arrivedAt, final, carriedDistance, carriedElapsed }
 //   distance: 항차 이동 거리(월드 단위), straight: 출발·도착 거점 직선 거리, compare: 'auto' | 'include' | 'exclude'
 
 export const MAX_RECORDS = 500;
@@ -98,6 +103,8 @@ export function normalizeRecord(value) {
     departedAt: finiteOrNull(value.departedAt),
     arrivedAt,
     final: value.final !== false,
+    carriedDistance: finiteOrNull(value.carriedDistance) ?? 0,
+    carriedElapsed: finiteOrNull(value.carriedElapsed) ?? 0,
   };
 }
 
@@ -118,6 +125,14 @@ export function normalizeLeg(value) {
   if (!voyageId) return null;
   return {
     voyageId,
+    recordId: stringOrNull(value.recordId) ?? voyageId,
+    carriedDistance: finiteOrNull(value.carriedDistance) ?? 0,
+    carriedElapsed: finiteOrNull(value.carriedElapsed) ?? 0,
+    voyageDistance: finiteOrNull(value.voyageDistance),
+    voyageElapsed: finiteOrNull(value.voyageElapsed),
+    gapStartedAt: finiteOrNull(value.gapStartedAt),
+    gapEndedAt: finiteOrNull(value.gapEndedAt),
+    endedAt: finiteOrNull(value.endedAt),
     from: normalizePlace(value.from),
     fromEstimated: value.fromEstimated === true,
     openedBySnapshot: value.openedBySnapshot === true,
@@ -156,10 +171,10 @@ export function upsertRecord(records, record) {
   return [record, ...records].slice(0, MAX_RECORDS);
 }
 
-/** 지금 항차를 기록 모양으로. 입항이 없었으면 도착지 모름이고 시각은 `at`이다. */
+/** 지금 항차를 기록 모양으로. 입항이 없었으면 도착지 모름이고 시각은 Navigator가 항차를 끝낸 때(없으면 `at`)다. */
 export function legToRecord(leg, final, at) {
   return {
-    recordId: leg.voyageId,
+    recordId: leg.recordId ?? leg.voyageId,
     voyageId: leg.voyageId,
     from: leg.from,
     fromEstimated: leg.fromEstimated === true,
@@ -171,14 +186,67 @@ export function legToRecord(leg, final, at) {
     regions: leg.regions ?? [],
     compare: 'auto',
     departedAt: leg.departedAt,
-    arrivedAt: leg.arrivedAt ?? at,
+    arrivedAt: leg.arrivedAt ?? leg.endedAt ?? at,
     final,
+    carriedDistance: leg.carriedDistance ?? 0,
+    carriedElapsed: leg.carriedElapsed ?? 0,
+  };
+}
+
+/**
+ * Navigator가 항차를 바꿨지만 그 사이 입항(`shore.arrived`)도 새 출항(`shore.departed`)도 없었으면 같은 뱃길로 이어 간다.
+ * Navigator 항차는 측량 판독 공백으로도 나뉘는데(항구 근처 0일 판독이 3초 끊김, 캡처 오류 포함), 입출항 이벤트는 캡처
+ * 오류를 입항으로 치지 않아 "포르투 → 도착지 모름" + "출발지 모름 → 비아나두카스텔루"로 갈렸다(실기기 2026-11-16 22:15).
+ * snapshot으로 연(켠 직후 낡은 ID일 수 있는) 항차와, 판독 끊김 없이 바뀐 항차(사용자가 직접 새 항차 시작)는 잇지 않는다.
+ */
+export function canContinueLeg(leg, pending, at, nextSailingDays = null) {
+  if (leg === null || leg === undefined || pending !== null || leg.openedBySnapshot === true) return false;
+  // 입항 판정이 있었으면(거점을 모르는 상륙지·필드 입항 포함) 실제 정박이다.
+  if (leg.arrivedAt !== null && leg.arrivedAt !== undefined) return false;
+  // 짧은 판독 끊김 직후에만 잇는다: 마지막 정상 판독 뒤 판독 끊김을 봤고, 정상 판독이 끊긴 지 15초 안이다.
+  // 사용자가 바다에서 새 항차를 직접 시작하면(판독 정상) 지금처럼 나누고, 입항 판정을 놓친 긴 정박도 잇지 않는다.
+  // 판독 순서가 아니라 끊김 구간 길이로 본다. Navigator는 끊긴 뒤 좌표를 먼저 되찾고(같은 항차, tracking) 항해일수까지
+  // 읽은 다음 판독에서야 항차를 바꾸므로, 끊김 뒤 정상 판독이 한두 번 끼어도 잇는다.
+  const { gapStartedAt, gapEndedAt } = leg;
+  if (gapStartedAt === null || gapStartedAt === undefined || at < gapStartedAt) return false;
+  const gapEnd = gapEndedAt ?? at;
+  if (gapEnd - gapStartedAt > CONTINUE_MAX_INTERRUPTION_MS) return false;
+  if (at - gapStartedAt > CONTINUE_WITHIN_MS) return false;
+  // 항해일수가 줄었으면 입항했다 다시 나간 것이다(일수는 입항 때만 초기화).
+  const days = leg.metrics ? leg.metrics.sailingDays : null;
+  if (nextSailingDays !== null && days !== null && nextSailingDays < days) return false;
+  return true;
+}
+
+/** 판독 끊김 구간이 이보다 길면 잇지 않는다(입항 판정을 놓친 정박일 수 있음). */
+export const CONTINUE_MAX_INTERRUPTION_MS = 15_000;
+/** 끊김이 시작된 뒤 이 시간 안에 바뀐 항차만 잇는다(좌표 복구 뒤 항해일수 판독을 기다리는 여유 포함). */
+export const CONTINUE_WITHIN_MS = 30_000;
+
+/**
+ * 앞 항차의 거리·시간을 이어 받아 새 voyageId로 같은 기록을 계속한다. 기록 ID는 처음 항차 것을 유지한다.
+ * `voyageDistance`·`voyageElapsed`는 지금 Navigator 항차 하나의 판독값이고, `carried*`는 이어 온 앞 항차들의 합이다.
+ */
+export function continueLeg(leg, voyageId) {
+  return {
+    ...leg,
+    voyageId,
+    recordId: leg.recordId ?? leg.voyageId,
+    carriedDistance: (leg.carriedDistance ?? 0) + (leg.voyageDistance ?? 0),
+    carriedElapsed: (leg.carriedElapsed ?? 0) + (leg.voyageElapsed ?? 0),
+    voyageDistance: null,
+    voyageElapsed: null,
+    gapStartedAt: null,
+    gapEndedAt: null,
+    endedAt: null,
+    openedBySnapshot: false,
   };
 }
 
 function openLeg(voyageId, pending, at) {
   return {
     voyageId,
+    recordId: voyageId,
     from: pending ? pending.from : null,
     fromEstimated: false,
     to: null,
@@ -278,12 +346,24 @@ export function applyEvent(state, event, place = null) {
     records = upsertRecord(records, upsert);
   };
 
+  // Navigator가 끝낸 항차(잇기를 기다리던 항차)에는 입출항·해역을 붙이지 않는다. 그 전에 확정한다.
+  if (current && current.endedAt !== null && current.endedAt !== undefined
+    && (event.kind === 'shore.departed' || event.kind === 'shore.arrived' || event.kind === 'region.changed')) {
+    finish(current);
+    current = null;
+  }
+
   switch (event.kind) {
     case 'voyage.ended': {
       const voyageId = stringOrNull(data.voyageId);
       if (current && current.voyageId === voyageId) {
-        finish(current);
-        current = null;
+        if (canContinueLeg(current, pending, at)) {
+          // 입출항 없이 끝난 항차는 다음 voyage.started가 이어 받는다. 끝난 때를 남겨 두어, 잇지 못하고 확정할 때 쓴다.
+          current = { ...current, endedAt: at };
+        } else {
+          finish(current);
+          current = null;
+        }
       }
       break;
     }
@@ -297,6 +377,10 @@ export function applyEvent(state, event, place = null) {
           current = { ...current, from: pending.from, fromEstimated: false, departedAt: pending.at };
           pending = null;
         }
+        break;
+      }
+      if (canContinueLeg(current, pending, at)) {
+        current = continueLeg(current, voyageId);
         break;
       }
       // voyage.ended를 놓쳤으면 앞 항차를 여기서 확정한다.
@@ -357,44 +441,93 @@ export function applyVoyage(state, snapshot, toKnots) {
   let { current, pending, records } = state;
   let upsert = null;
   let switched = false;
+  let marked = false;
+  // 같은 항차의 판독 끊김 구간을 남긴다(입출항 없는 Navigator 항차 전환을 잇는 근거, 메모리 위주).
+  // 끊김 시작 = 정상 판독 뒤 처음 본 끊김, 끝 = 그 뒤 처음 본 정상 판독. 새 끊김은 앞 구간을 바꾼다.
+  const seenAt = finiteOrNull(snapshot.emittedAtUnixMillis);
+  if (current && current.voyageId === metrics.voyageId && seenAt !== null && typeof snapshot.trackingQuality === 'string') {
+    const gapOpen = current.gapStartedAt !== null && current.gapStartedAt !== undefined
+      && (current.gapEndedAt === null || current.gapEndedAt === undefined);
+    if (snapshot.trackingQuality !== 'tracking' && !gapOpen) {
+      current = { ...current, gapStartedAt: seenAt, gapEndedAt: null };
+      marked = true;
+    } else if (snapshot.trackingQuality === 'tracking' && gapOpen) {
+      current = { ...current, gapEndedAt: seenAt };
+      marked = true;
+    }
+  }
   if (!current || current.voyageId !== metrics.voyageId) {
-    const known = records.find((record) => record.recordId === metrics.voyageId);
+    // 이어 붙인 기록은 recordId(처음 항차)와 voyageId(지금 항차)가 다르므로 둘 다로 찾는다.
+    const known = records.find((record) => record.voyageId === metrics.voyageId || record.recordId === metrics.voyageId);
+    // 이미 다음 항차로 이어 붙인 기록의 처음 항차 ID(낡은 snapshot)로는 다시 열지 않는다. 합친 값을 덮어쓰지 않게 한다.
+    if (known && known.voyageId && known.voyageId !== metrics.voyageId) return none;
     // Navigator를 켠 직후 snapshot은 방금 끝난(입항해 멈춘) 앞 항차를 줄 수 있다. 기록에 없는 항차는 실제로 항해 중일 때만
     // 연다. 그러지 않으면 이어 오는 출항 판정이 그 낡은 항차에 붙어 "출발지 → 도착지 모름" 항차가 하나 더 생긴다.
     if (!known && snapshot.state !== undefined && snapshot.state !== 'underway') return none;
     // 사용자가 지운 뒤라도 같은 항차를 다시 열 뿐이다. 앞 항차는 확정한다.
     const at = finiteOrNull(snapshot.emittedAtUnixMillis) ?? 0;
-    if (current && justDeparted(current, at)) {
-      if (!pending || pending.at < current.departedAt) pending = { from: current.from, at: current.departedAt };
-    } else if (current) {
-      upsert = legToRecord(current, true, at);
-      records = upsertRecord(records, upsert);
-    }
-    current = known
-      ? {
-        voyageId: known.recordId,
-        from: known.from,
-        fromEstimated: known.fromEstimated === true,
-        to: known.to,
-        straight: known.straight,
-        departedAt: known.departedAt,
-        arrivedAt: known.to ? known.arrivedAt : null,
-        metrics: null,
-        regions: known.regions ?? [],
+    // canContinueLeg는 snapshot으로 연 항차를 잇지 않으므로 justDeparted(snapshot으로 연 항차만)와 겹치지 않는다.
+    if (!known && canContinueLeg(current, pending, at, metrics.sailingDays)) {
+      // 입출항 없이 Navigator 항차만 바뀌었다(voyage.started보다 snapshot이 먼저 옴). 같은 뱃길로 잇는다.
+      current = continueLeg(current, metrics.voyageId);
+    } else {
+      if (current && justDeparted(current, at)) {
+        if (!pending || pending.at < current.departedAt) pending = { from: current.from, at: current.departedAt };
+      } else if (current) {
+        upsert = legToRecord(current, true, at);
+        records = upsertRecord(records, upsert);
       }
-      : { ...openLeg(metrics.voyageId, pending, finiteOrNull(snapshot.startedAtUnixMillis) ?? at), openedBySnapshot: true };
-    if (!known) pending = null;
+      current = known
+        ? {
+          voyageId: metrics.voyageId,
+          recordId: known.recordId,
+          from: known.from,
+          fromEstimated: known.fromEstimated === true,
+          to: known.to,
+          straight: known.straight,
+          departedAt: known.departedAt,
+          // 확정 전 기록은 입항 때 넣은 것이다(거점을 모르는 입항도 시각은 있다).
+          arrivedAt: known.to || known.final === false ? known.arrivedAt : null,
+          metrics: null,
+          regions: known.regions ?? [],
+          carriedDistance: known.voyageId === metrics.voyageId ? known.carriedDistance ?? 0 : 0,
+          carriedElapsed: known.voyageId === metrics.voyageId ? known.carriedElapsed ?? 0 : 0,
+        }
+        : { ...openLeg(metrics.voyageId, pending, finiteOrNull(snapshot.startedAtUnixMillis) ?? at), openedBySnapshot: true };
+      if (!known) pending = null;
+    }
     switched = true;
+  }
+  // 이어 온 항차가 있으면 거리·시간을 합쳐 평균 속도를 다시 잰다.
+  const carriedDistance = current.carriedDistance ?? 0;
+  const carriedElapsed = current.carriedElapsed ?? 0;
+  let { knots } = metrics;
+  let distance = metrics.distance;
+  if ((carriedDistance > 0 || carriedElapsed > 0) && metrics.distance !== null) {
+    distance = carriedDistance + metrics.distance;
+    const elapsed = carriedElapsed + (metrics.elapsed ?? 0);
+    knots = elapsed >= 10_000 && distance > 0 ? finiteOrNull(toKnots(distance / (elapsed / 1000))) : null;
   }
   const prev = current.metrics ?? { sailingDays: null, knots: null, distance: null };
   const merged = {
     sailingDays: metrics.sailingDays ?? prev.sailingDays,
-    knots: metrics.knots ?? prev.knots,
-    distance: metrics.distance ?? prev.distance ?? null,
+    knots: knots ?? prev.knots,
+    distance: distance ?? prev.distance ?? null,
   };
   const daysChanged = merged.sailingDays !== prev.sailingDays;
-  if (!switched && !daysChanged && merged.knots === prev.knots && merged.distance === prev.distance) return none;
-  current = { ...current, metrics: merged };
+  if (!switched && !daysChanged && merged.knots === prev.knots && merged.distance === prev.distance) {
+    // 표시 값은 그대로여도 판독 시각과 이 항차 경과 시간은 메모리에 남긴다(이어 붙일 때 시간 합에 쓴다).
+    const elapsed = metrics.elapsed ?? current.voyageElapsed ?? null;
+    if (!marked && elapsed === current.voyageElapsed) return none;
+    current = { ...current, voyageElapsed: elapsed };
+    return { state: { ...state, current }, upsert: null, changed: true, persist: false };
+  }
+  current = {
+    ...current,
+    metrics: merged,
+    voyageDistance: metrics.distance ?? current.voyageDistance ?? null,
+    voyageElapsed: metrics.elapsed ?? current.voyageElapsed ?? null,
+  };
   return { state: { ...state, current, pending, records }, upsert, changed: true, persist: switched || daysChanged };
 }
 
@@ -413,7 +546,7 @@ export function metricsFromVoyage(snapshot, toKnots) {
   if (distance !== null && elapsed !== null && elapsed >= 10_000 && distance > 0) {
     knots = finiteOrNull(toKnots(distance / (elapsed / 1000)));
   }
-  return { voyageId, sailingDays: finiteOrNull(snapshot.lastSailingDays), knots, distance };
+  return { voyageId, sailingDays: finiteOrNull(snapshot.lastSailingDays), knots, distance, elapsed };
 }
 
 // ── 같은 구간 비교 ──
