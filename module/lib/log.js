@@ -23,8 +23,13 @@
 
 export const MAX_RECORDS = 500;
 export const MAX_REGIONS = 64;
-/** 이동 거리가 직선 거리의 이 배수를 넘으면 우회 항차로 본다. */
-export const DETOUR_RATIO = 2;
+/**
+ * 이동 거리가 직선 거리의 이 배수를 넘으면 우회 항차로 본다. Navigator 이동 거리는 판독 점 사이 거리의 합이라 판독 흔들림이
+ * 쌓여 짧은 항차일수록 실제보다 길게 나온다(리스본 → 비아나두카스텔루 직행이 직선의 2.5배). 그래서 거리는 보조 신호다.
+ */
+export const DETOUR_RATIO = 3;
+/** 같은 해역이 이 횟수 이상 다시 나오면(오가며 돌아다님) 우회로 본다. 경계를 한 번 스친 A→B→A는 우회가 아니다. */
+export const DETOUR_REGION_VISITS = 3;
 /** 출발지를 추정할 때 첫 측량 위치에서 도시까지의 최대 거리. Navigator 입항 판정과 같다. */
 export const DEPARTURE_ESTIMATE_RADIUS = 120;
 /** 첫 측량 위치는 항차를 연 시각 근처의 것만 쓴다(그 뒤 지나가는 도시를 출발지로 잡지 않게). */
@@ -331,13 +336,16 @@ export function applyVoyage(state, snapshot, toKnots) {
   let upsert = null;
   let switched = false;
   if (!current || current.voyageId !== metrics.voyageId) {
+    const known = records.find((record) => record.recordId === metrics.voyageId);
+    // Navigator를 켠 직후 snapshot은 방금 끝난(입항해 멈춘) 앞 항차를 줄 수 있다. 기록에 없는 항차는 실제로 항해 중일 때만
+    // 연다. 그러지 않으면 이어 오는 출항 판정이 그 낡은 항차에 붙어 "출발지 → 도착지 모름" 항차가 하나 더 생긴다.
+    if (!known && snapshot.state !== undefined && snapshot.state !== 'underway') return none;
     // 사용자가 지운 뒤라도 같은 항차를 다시 열 뿐이다. 앞 항차는 확정한다.
     const at = finiteOrNull(snapshot.emittedAtUnixMillis) ?? 0;
     if (current) {
       upsert = legToRecord(current, true, at);
       records = upsertRecord(records, upsert);
     }
-    const known = records.find((record) => record.recordId === metrics.voyageId);
     current = known
       ? {
         voyageId: known.recordId,
@@ -429,8 +437,21 @@ export function formatSeason(record) {
 
 // ── 우회 판정 ──
 
-/** 이동 거리가 직선의 2배를 넘는지. 거리를 모르면 우회가 아니다. */
+/** 지나간 해역 중 가장 많이 다시 들른 해역의 방문 횟수. */
+export function maxRegionVisits(regions) {
+  const counts = new Map();
+  let max = 0;
+  for (const region of regions ?? []) {
+    const count = (counts.get(region.regionId) ?? 0) + 1;
+    counts.set(region.regionId, count);
+    max = Math.max(max, count);
+  }
+  return max;
+}
+
+/** 같은 해역을 세 번 이상 들렀거나 이동 거리가 직선의 3배를 넘는지. 둘 다 모르면 우회가 아니다. */
 export function isDetour(record) {
+  if (maxRegionVisits(record.regions) >= DETOUR_REGION_VISITS) return true;
   return record.distance !== null && record.straight !== null && record.straight > 0
     && record.distance > record.straight * DETOUR_RATIO;
 }

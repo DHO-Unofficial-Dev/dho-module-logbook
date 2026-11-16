@@ -18,6 +18,7 @@ import {
   formatTimeRange,
   includedInComparison,
   isDetour,
+  maxRegionVisits,
   nextCompareMode,
   recordSeason,
   seasonAt,
@@ -504,12 +505,18 @@ test('같은 구간은 같은 계절 기록과 먼저 비교하고, 없으면 �
   assert.match(arrivalNotice(records[0], same).body, /같은 계절 지난 평균보다 2일 빠름/);
 });
 
-test('이동 거리가 직선의 2배를 넘으면 우회로 비교에서 빼고, 사용자가 고른 값이 이긴다', () => {
+test('같은 해역을 세 번 들렀거나 이동 거리가 직선의 3배를 넘으면 우회로 비교에서 빼고, 사용자가 고른 값이 이긴다', () => {
   const base = { ...record('d', LISBON, LONDON, 9), straight: 100 };
-  assert.equal(isDetour({ ...base, distance: 201 }), true);
-  assert.equal(isDetour({ ...base, distance: 200 }), false);
+  const visit = (regionId, at) => ({ regionId, name: regionId, at });
+  assert.equal(isDetour({ ...base, distance: 301 }), true);
+  // 판독 흔들림으로 직행도 직선의 2.5배까지 나온다(실기기 리스본 → 비아나두카스텔루 365/148).
+  assert.equal(isDetour({ ...base, distance: 250 }), false);
   assert.equal(isDetour({ ...base, distance: null }), false);
-  const detour = { ...base, distance: 280 };
+  // 경계를 한 번 스친 A→B→A는 직행, 두 해역을 오간 A→B→A→B→A는 우회.
+  assert.equal(isDetour({ ...base, distance: null, regions: [visit('a', 1), visit('b', 2), visit('a', 3)] }), false);
+  assert.equal(isDetour({ ...base, distance: null, regions: ['a', 'b', 'a', 'b', 'a'].map(visit) }), true);
+  assert.equal(maxRegionVisits(['a', 'b', 'a'].map(visit)), 2);
+  const detour = { ...base, distance: 310 };
   assert.equal(includedInComparison(detour), false);
   assert.equal(includedInComparison({ ...detour, compare: 'include' }), true);
   assert.equal(includedInComparison({ ...base, distance: 120, compare: 'exclude' }), false);
@@ -524,7 +531,7 @@ test('이동 거리가 직선의 2배를 넘으면 우회로 비교에서 빼고
 
 test('비교 넣기/빼기는 자동 판정과 같아지면 auto로 되돌린다', () => {
   const direct = { ...record('a', LISBON, LONDON, 5), distance: 120, straight: 100, compare: 'auto' };
-  const detour = { ...direct, distance: 300 };
+  const detour = { ...direct, distance: 310 };
   assert.equal(nextCompareMode(direct), 'exclude');
   assert.equal(nextCompareMode({ ...direct, compare: 'exclude' }), 'auto');
   assert.equal(nextCompareMode(detour), 'include');
@@ -575,6 +582,23 @@ test('service가 같은 항차를 다시 써도 사용자의 비교 선택과 �
   assert.equal(next[0].sailingDays, 10);
   assert.equal(next[0].compare, 'exclude');
   assert.equal(next[0].regions.length, 1);
+});
+
+test('Navigator를 켠 직후 방금 끝난(입항해 멈춘) 앞 항차 snapshot으로는 항차를 열지 않는다', () => {
+  revision = 0;
+  // 실기기 2026-11-16: 리스본에서 켜자 앞 항차(paused)가 열리고, 출항 판정이 거기 붙어 "리스본 → 도착지 모름"이 생겼다.
+  const { state } = run([
+    snap('old', 2, { state: 'paused' }),
+    ev('shore.departed', { shoreContext: 'port', nearestPoiId: 'poi-lisbon' }),
+    ev('voyage.ended', { voyageId: 'old' }),
+    ev('voyage.started', { voyageId: 'new' }),
+    snap('new', 0),
+    ev('shore.arrived', { shoreContext: 'port', nearestPoiId: 'poi-london' }),
+  ]);
+  assert.equal(state.records.length, 1);
+  assert.deepEqual(state.records[0].from, LISBON);
+  assert.equal(state.records[0].fromEstimated, false);
+  assert.deepEqual(state.records[0].to, LONDON);
 });
 
 test('지나간 해역은 같은 해역 연속을 한 번으로 묶어 항차에 남는다', () => {
