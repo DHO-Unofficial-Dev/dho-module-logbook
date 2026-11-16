@@ -825,5 +825,5 @@ export function toCsv(records) {
 
 export function csvFileName(now) {
   const date = new Date(now);
-  return `voyage-log-${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}.csv`;
+  return `logbook-${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}.csv`;
 }
