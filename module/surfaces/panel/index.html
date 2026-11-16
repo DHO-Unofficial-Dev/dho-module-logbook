@@ -21,7 +21,8 @@
       <table class="vl-table">
         <thead>
           <tr>
-            <th scope="col">날짜</th>
+            <th scope="col">운행</th>
+            <th scope="col">계절</th>
             <th scope="col">구간</th>
             <th scope="col" class="vl-num">일수</th>
             <th scope="col" class="vl-num">평균 속도</th>
@@ -35,7 +36,8 @@
   </section>
 
   <footer class="vl-foot">
-    <p class="vl-note">항차는 다음 출항 때 확정됩니다. 입항·출항은 화면 판독 추정이라 입항 없이 끝난 항차는 "도착지 모름"으로 남습니다.</p>
+    <p class="vl-note">항차는 다음 출항 때 확정됩니다. 입항·출항은 화면 판독 추정이라 입항 없이 끝난 항차는 "도착지 모름"으로 남습니다.
+      이동 거리가 두 항구 직선 거리의 2배를 넘으면 "우회"로 보고 비교에서 뺍니다. 줄을 펼쳐 직접 바꿀 수 있습니다.</p>
     <div class="vl-actions">
       <button type="button" class="vl-button" id="export">CSV 내보내기</button>
       <button type="button" class="vl-button vl-button--danger" id="clear">기록 지우기</button>

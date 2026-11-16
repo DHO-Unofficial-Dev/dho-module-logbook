@@ -7,12 +7,22 @@ import { fileURLToPath } from 'node:url';
 
 import {
   MAX_RECORDS,
+  appendRegion,
   applyEvent,
   applyVoyage,
   arrivalNotice,
   compareWithPast,
   emptyState,
   formatDiff,
+  formatSeason,
+  formatTimeRange,
+  includedInComparison,
+  isDetour,
+  nextCompareMode,
+  recordSeason,
+  seasonAt,
+  setRecordCompare,
+  worldDistance,
   metricsFromVoyage,
   normalizeLeg,
   normalizePending,
@@ -212,7 +222,7 @@ test('항차 없이 입항만 오면 기록하지 않고, 다른 항차 ended는
 });
 
 test('voyage snapshot에서 항해일수와 평균 속도를 고른다', () => {
-  assert.deepEqual(metricsFromVoyage(snap('v', 6, { distanceTravelled: 300, elapsedMillis: 60_000 }), (v) => v * 2), { voyageId: 'v', sailingDays: 6, knots: 10 });
+  assert.deepEqual(metricsFromVoyage(snap('v', 6, { distanceTravelled: 300, elapsedMillis: 60_000 }), (v) => v * 2), { voyageId: 'v', sailingDays: 6, knots: 10, distance: 300 });
   assert.equal(metricsFromVoyage(snap('v', 1, { elapsedMillis: 2_000 }), toKnots).knots, null);
   assert.equal(metricsFromVoyage(snap('v', 1), () => null).knots, null);
   assert.equal(metricsFromVoyage(snap(null, 1), toKnots), null);
@@ -295,7 +305,7 @@ test('CSV는 BOM·CRLF·따옴표 처리를 한다', () => {
   const csv = toCsv([
     { ...record('r1', tricky, null, 3.4, Date.UTC(2026, 10, 15, 3, 4)), knots: 9.25 },
   ]);
-  assert.ok(csv.startsWith('﻿도착 시각,출발 시각,출발 거점 ID,출발,도착 거점 ID,도착,항해일수,평균 속도(kn)\r\n'));
+  assert.ok(csv.startsWith('﻿도착 시각,출발 시각,출발 거점 ID,출발,도착 거점 ID,도착,항해일수,평균 속도(kn),계절,비교,지나간 해역\r\n'));
   const line = csv.split('\r\n')[1];
   assert.ok(line.includes(',"p,1","산 ""마르코"", 항",,도착지 모름,3,9.3'), line);
   assert.ok(csv.endsWith('\r\n'));
@@ -452,5 +462,184 @@ test('manifest: 필요한 capability만, 설정 id와 service 코드가 맞다',
   assert.equal(field.default, true);
   const service = readFileSync(join(moduleDir, manifest.service.entry), 'utf8');
   assert.ok(service.includes("'arrival-toast'"));
-  assert.deepEqual([...EVENT_KINDS].sort(), ['shore.arrived', 'shore.departed', 'voyage.ended', 'voyage.started']);
+  assert.deepEqual([...EVENT_KINDS].sort(), ['region.changed', 'shore.arrived', 'shore.departed', 'voyage.ended', 'voyage.started']);
+});
+
+// ── 운행 시간·계절·우회·출발지 추정 ──
+
+test('운행 시간은 같은 날이면 도착 시각만, 날짜가 바뀌면 도착에도 날짜를 붙인다', () => {
+  const at = (day, hour, minute) => new Date(2026, 10, day, hour, minute).getTime();
+  assert.equal(formatTimeRange(at(16, 14, 0), at(16, 15, 31)), '11-16 14:00~15:31');
+  assert.equal(formatTimeRange(at(15, 23, 40), at(16, 0, 20)), '11-15 23:40~11-16 00:20');
+  assert.equal(formatTimeRange(null, at(16, 15, 31)), '11-16 15:31');
+});
+
+test('계절은 공개 게임 시각 공식(현실 9시간마다 전환)으로 시각에서 계산한다', () => {
+  const epoch = Date.UTC(2005, 2, 16, 4, 30, 0);
+  const hours = (count) => count * 3_600_000;
+  assert.equal(seasonAt(epoch), 'summer');
+  assert.equal(seasonAt(epoch + hours(9) - 1), 'summer');
+  assert.equal(seasonAt(epoch + hours(9)), 'winter');
+  assert.equal(seasonAt(epoch + hours(18)), 'summer');
+  assert.equal(seasonAt(null), null);
+  const crossing = { departedAt: epoch + hours(9) - 60_000, arrivedAt: epoch + hours(9) + 60_000 };
+  assert.equal(formatSeason(crossing), '여름→겨울');
+  assert.equal(recordSeason(crossing).key, 'summer');
+  assert.equal(formatSeason({ departedAt: null, arrivedAt: epoch + hours(9) }), '겨울');
+});
+
+test('같은 구간은 같은 계절 기록과 먼저 비교하고, 없으면 계절을 가리지 않는다', () => {
+  const epoch = Date.UTC(2005, 2, 16, 4, 30, 0);
+  const summer = epoch + 3_600_000;
+  const winter = epoch + 10 * 3_600_000;
+  const at = (base, sailingDays, id) => ({ ...record(id, LISBON, LONDON, sailingDays, base), departedAt: base - 1000 });
+  const records = [at(winter + 2, 10, 'now'), at(summer + 1, 6, 'old-summer'), at(winter + 1, 12, 'old-winter')];
+  const same = compareWithPast(records, 0);
+  assert.equal(same.kind, 'diff');
+  assert.equal(same.sameSeason, true);
+  assert.equal(same.average, 12);
+  const onlySummer = compareWithPast([at(winter + 2, 10, 'now'), at(summer + 1, 6, 'old-summer')], 0);
+  assert.equal(onlySummer.sameSeason, false);
+  assert.equal(onlySummer.average, 6);
+  assert.match(arrivalNotice(records[0], same).body, /같은 계절 지난 평균보다 2일 빠름/);
+});
+
+test('이동 거리가 직선의 2배를 넘으면 우회로 비교에서 빼고, 사용자가 고른 값이 이긴다', () => {
+  const base = { ...record('d', LISBON, LONDON, 9), straight: 100 };
+  assert.equal(isDetour({ ...base, distance: 201 }), true);
+  assert.equal(isDetour({ ...base, distance: 200 }), false);
+  assert.equal(isDetour({ ...base, distance: null }), false);
+  const detour = { ...base, distance: 280 };
+  assert.equal(includedInComparison(detour), false);
+  assert.equal(includedInComparison({ ...detour, compare: 'include' }), true);
+  assert.equal(includedInComparison({ ...base, distance: 120, compare: 'exclude' }), false);
+  const records = [detour, record('old', LISBON, LONDON, 4)];
+  assert.deepEqual(compareWithPast(records, 0), { kind: 'excluded' });
+  assert.equal(formatDiff({ kind: 'excluded' }), '비교 안 함');
+  // 우회 항차는 다른 항차의 평균에도 넣지 않는다.
+  assert.equal(routeStats(records, 'poi-lisbon>poi-london').count, 1);
+  assert.equal(setRecordCompare(records, 'd', 'include')[0].compare, 'include');
+  assert.equal(setRecordCompare(records, 'd', 'bogus'), records);
+});
+
+test('비교 넣기/빼기는 자동 판정과 같아지면 auto로 되돌린다', () => {
+  const direct = { ...record('a', LISBON, LONDON, 5), distance: 120, straight: 100, compare: 'auto' };
+  const detour = { ...direct, distance: 300 };
+  assert.equal(nextCompareMode(direct), 'exclude');
+  assert.equal(nextCompareMode({ ...direct, compare: 'exclude' }), 'auto');
+  assert.equal(nextCompareMode(detour), 'include');
+  assert.equal(nextCompareMode({ ...detour, compare: 'include' }), 'auto');
+});
+
+test('예전 형식 기록은 새 필드를 기본값으로 채워 읽는다', () => {
+  const [old] = normalizeRecords([{ recordId: 'r', voyageId: 'r', from: LISBON, to: LONDON, sailingDays: 3, knots: 9, departedAt: 1, arrivedAt: 2, final: true }]);
+  assert.equal(old.compare, 'auto');
+  assert.deepEqual(old.regions, []);
+  assert.equal(old.fromEstimated, false);
+  assert.equal(old.distance, null);
+  assert.equal(old.straight, null);
+  assert.equal(includedInComparison(old), true);
+  assert.equal(normalizeRecords([{ ...old, compare: 'bogus' }])[0].compare, 'auto');
+});
+
+test('CSV는 수식으로 읽힐 값 앞에 따옴표 문자를 붙인다', () => {
+  const csv = toCsv([{ ...record('r', { poiId: 'p', name: '=HYPERLINK(1)' }, LONDON, 1, 5), regions: [{ regionId: 'x', name: '@해역', at: 1 }] }]);
+  const line = csv.split('\r\n')[1];
+  assert.ok(line.includes(`,'=HYPERLINK(1),`), line);
+  assert.ok(line.endsWith(`'@해역`), line);
+});
+
+test('출발지 추정은 항차를 연 때보다 이른 위치를 쓰지 않고, 한 항차에 한 번만 시도한다', async () => {
+  let calls = 0;
+  const recorder = createRecorder({
+    storage: fakeStorage(),
+    resolver: createResolver(async () => null),
+    getPoi: async (poiId) => placeMap[poiId] ?? null,
+    nearbyPort: async () => { calls += 1; return null; },
+    toKnots,
+    notify: async () => {},
+    toastEnabled: () => false,
+  });
+  await recorder.start({ values: {}, voyage: snap('v1', 0, { startedAtUnixMillis: 10_000 }) });
+  await recorder.position({ quality: 'live', value: { x: 1, y: 1 }, observedAtUnixMillis: 4_000 });
+  assert.equal(calls, 0);
+  await recorder.position({ quality: 'live', value: { x: 1, y: 1 }, observedAtUnixMillis: 10_200 });
+  await recorder.position({ quality: 'live', value: { x: 2, y: 2 }, observedAtUnixMillis: 10_400 });
+  assert.equal(calls, 1);
+  assert.equal(recorder.getState().current.from, null);
+});
+
+test('service가 같은 항차를 다시 써도 사용자의 비교 선택과 해역 경로를 지킨다', () => {
+  const stored = [{ ...record('v', LISBON, LONDON, 9), compare: 'exclude', regions: [{ regionId: 'r1', name: '북해', at: 1 }] }];
+  const next = upsertRecord(stored, { ...record('v', LISBON, LONDON, 10), compare: 'auto', regions: [] });
+  assert.equal(next[0].sailingDays, 10);
+  assert.equal(next[0].compare, 'exclude');
+  assert.equal(next[0].regions.length, 1);
+});
+
+test('지나간 해역은 같은 해역 연속을 한 번으로 묶어 항차에 남는다', () => {
+  revision = 0;
+  const { state } = run([
+    snap('v1', 0),
+    ev('region.changed', { fromRegionId: 'a', regionId: 'b', name: '북동대서양', parentRegion: null }),
+    ev('region.changed', { fromRegionId: 'b', regionId: 'b', name: '북동대서양', parentRegion: null }),
+    ev('region.changed', { fromRegionId: 'b', regionId: 'c', name: '리스본 앞바다', parentRegion: null }),
+    ev('region.changed', { fromRegionId: 'c', regionId: 'b', name: '북동대서양', parentRegion: null }),
+    ev('shore.arrived', { shoreContext: 'port', nearestPoiId: 'poi-lisbon' }),
+  ]);
+  assert.deepEqual(state.records[0].regions.map((item) => item.name), ['북동대서양', '리스본 앞바다', '북동대서양']);
+  assert.equal(appendRegion(Array.from({ length: 64 }, (_, i) => ({ regionId: `r${i}`, name: '', at: i })), { regionId: 'x', name: '', at: 99 }).length, 64);
+});
+
+test('출발지를 모르면 첫 측량 위치의 가까운 도시로 추정하고, 출항 판정이 오면 그것으로 바꾼다', async () => {
+  const storage = fakeStorage();
+  const recorder = createRecorder({
+    storage,
+    resolver: createResolver(async () => null),
+    getPoi: async (poiId) => ({ ...placeMap[poiId], point: { x: 0, y: 0 } }),
+    nearbyPort: async () => LISBON,
+    toKnots,
+    notify: async () => {},
+    toastEnabled: () => false,
+  });
+  await recorder.start({ values: {}, voyage: snap('v1', 0, { startedAtUnixMillis: 10_000 }) });
+  // 항차를 연 시각보다 1분 넘게 뒤의 위치는 쓰지 않는다.
+  await recorder.position({ quality: 'live', value: { x: 1, y: 1 }, observedAtUnixMillis: 10_000 + 61_000 });
+  assert.equal(recorder.getState().current.from, null);
+  const other = createRecorder({
+    storage: fakeStorage(),
+    resolver: createResolver(async () => null),
+    getPoi: async (poiId) => placeMap[poiId] ?? null,
+    nearbyPort: async () => LISBON,
+    toKnots,
+    notify: async () => {},
+    toastEnabled: () => false,
+  });
+  await other.start({ values: {}, voyage: snap('v1', 0, { startedAtUnixMillis: 10_000 }) });
+  await other.position({ quality: 'held', value: { x: 1, y: 1 }, observedAtUnixMillis: 10_500 });
+  assert.equal(other.getState().current.from, null);
+  await other.position({ quality: 'live', value: { x: 1, y: 1 }, observedAtUnixMillis: 11_000 });
+  assert.deepEqual(other.getState().current.from, LISBON);
+  assert.equal(other.getState().current.fromEstimated, true);
+  await other.event(ev('shore.departed', { shoreContext: 'port', nearestPoiId: 'poi-seville' }, 12_000));
+  assert.deepEqual(other.getState().current.from, SEVILLE);
+  assert.equal(other.getState().current.fromEstimated, false);
+});
+
+test('입항하면 출발·도착 거점 직선 거리를 재어 기록에 남긴다', async () => {
+  const points = { 'poi-lisbon': { x: 0, y: 0 }, 'poi-london': { x: 30, y: 40 } };
+  const recorder = createRecorder({
+    storage: fakeStorage(),
+    resolver: createResolver(async () => null),
+    getPoi: async (poiId) => (placeMap[poiId] ? { ...placeMap[poiId], point: points[poiId] } : null),
+    toKnots,
+    notify: async () => {},
+    toastEnabled: () => false,
+  });
+  await recorder.start({ values: {}, voyage: null });
+  await recorder.event(ev('shore.departed', { shoreContext: 'port', nearestPoiId: 'poi-lisbon' }, 1_000));
+  await recorder.event(ev('voyage.started', { voyageId: 'v9' }, 1_100));
+  await recorder.event(ev('shore.arrived', { shoreContext: 'port', nearestPoiId: 'poi-london' }, 5_000));
+  assert.equal(recorder.getState().records[0].straight, 50);
+  assert.equal(worldDistance({ x: 16380, y: 0 }, { x: 4, y: 0 }), 8);
 });

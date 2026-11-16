@@ -156,6 +156,87 @@ body {
   color: var(--vl-muted);
 }
 
+.vl-table .vl-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.vl-expand {
+  margin-right: 4px;
+  padding: 0 4px;
+  border: 1px solid var(--vl-line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--vl-muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.vl-expand:hover,
+.vl-expand[aria-expanded="true"] {
+  border-color: var(--vl-accent);
+  color: var(--vl-accent);
+}
+
+.vl-expand:focus-visible,
+.vl-link:focus-visible {
+  outline: 2px solid var(--vl-focus);
+  outline-offset: 1px;
+}
+
+.vl-detour {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--vl-danger);
+  border-radius: 3px;
+  color: var(--vl-danger);
+  font-size: 10px;
+}
+
+.vl-table .vl-detail td {
+  padding: 6px 10px 8px 26px;
+  background: var(--vl-surface);
+  white-space: normal;
+}
+
+.vl-regions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.vl-region {
+  padding: 0 7px;
+  border: 1px solid var(--vl-line);
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.vl-region + .vl-region::before {
+  content: "→ ";
+  margin-left: -4px;
+  color: var(--vl-muted);
+}
+
+.vl-detail__line {
+  margin: 0;
+  color: var(--vl-muted);
+  font-size: 11px;
+}
+
+.vl-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--vl-accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .vl-foot {
   display: grid;
   gap: 8px;

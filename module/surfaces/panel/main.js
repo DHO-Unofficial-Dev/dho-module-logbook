@@ -2,6 +2,7 @@
 import { files, geo, storage, voyage, world } from '@dho/sdk';
 
 import {
+  SEASON_LABELS,
   UNKNOWN_DEPARTURE,
   UNKNOWN_PLACE,
   compareWithPast,
@@ -9,11 +10,17 @@ import {
   formatDays,
   formatDiff,
   formatKnots,
-  formatShortDate,
+  formatSeason,
+  formatTimeRange,
+  includedInComparison,
   metricsFromVoyage,
+  nextCompareMode,
   normalizeLeg,
   normalizeRecords,
+  recordSeason,
   routesFrom,
+  seasonAt,
+  setRecordCompare,
   toCsv,
 } from '../../lib/log.js';
 import { createResolver, placeIdsOf } from '../../lib/resolver.js';
@@ -41,6 +48,8 @@ let current = null;
 let voyageSnapshot = null;
 let resolving = false;
 let resolveAgain = false;
+/** 펼친 기록(recordId). 패널을 닫으면 잊는다. */
+const expanded = new Set();
 
 function showStatus(text) {
   els.status.textContent = text;
@@ -50,6 +59,12 @@ function showStatus(text) {
 function nameOf(place, fallback) {
   if (!place) return fallback;
   return resolver.nameOf(place.poiId) || place.name || place.poiId;
+}
+
+/** 첫 측량 위치로 추정한 출발지에는 "(추정)"을 붙인다. */
+function departureName(item) {
+  const name = nameOf(item.from, UNKNOWN_DEPARTURE);
+  return item.from && item.fromEstimated ? `${name}(추정)` : name;
 }
 
 function el(tag, className, text) {
@@ -70,7 +85,7 @@ function renderCurrent() {
     return;
   }
   const parts = [current.to ? '입항 · 다음 출항 때 확정' : '항해 중'];
-  const route = el('b', null, `${nameOf(current.from, UNKNOWN_DEPARTURE)} → ${current.to ? nameOf(current.to, UNKNOWN_PLACE) : '?'}`);
+  const route = el('b', null, `${departureName(current)} → ${current.to ? nameOf(current.to, UNKNOWN_PLACE) : '?'}`);
   const days = sameVoyage && metrics.sailingDays !== null ? metrics.sailingDays : current.metrics?.sailingDays ?? null;
   const knots = sameVoyage && metrics.knots !== null ? metrics.knots : current.metrics?.knots ?? null;
   const tail = [];
@@ -84,13 +99,15 @@ function renderCurrent() {
 function renderCompare() {
   els.compare.replaceChildren();
   const fromPoiId = current && current.from ? current.from.poiId : records.find((record) => record.from && record.to)?.from.poiId;
-  const routes = fromPoiId ? routesFrom(records, fromPoiId, resolve) : [];
+  // 지금 항차(없으면 지금 시각)의 계절 기록을 먼저 보인다. 바람이 계절마다 바뀐다.
+  const season = current ? recordSeason({ departedAt: current.departedAt, arrivedAt: Date.now() }).key : seasonAt(Date.now());
+  const routes = fromPoiId ? routesFrom(records, fromPoiId, resolve, 3, season) : [];
   const shown = routes.filter((route) => route.stats.count > 0);
   for (const route of shown) {
     const item = el('li');
     const latest = route.latest;
     item.append(el('span', 'vl-compare__route', `${nameOf(latest.from, UNKNOWN_DEPARTURE)} → ${nameOf(latest.to, UNKNOWN_PLACE)}`));
-    const stats = [];
+    const stats = [route.stats.sameSeason ? `${SEASON_LABELS[route.stats.season]}` : '계절 무관'];
     if (route.stats.best !== null) stats.push(`최고 ${formatDays(route.stats.best)}`);
     if (route.stats.average !== null) stats.push(`평균 ${(Math.round(route.stats.average * 10) / 10).toString()}일`);
     stats.push(`기록 ${route.stats.count}회`);
@@ -100,15 +117,89 @@ function renderCompare() {
   els.compareEmpty.hidden = shown.length > 0;
 }
 
+const COLUMN_COUNT = 6;
+
+/** 펼친 줄 id. 새 기록이 앞에 들어와도 같은 항차를 가리키게 recordId로 만든다. */
+function detailIdOf(recordId) {
+  return `detail-${recordId.replace(/[^A-Za-z0-9_-]/gu, '_')}`;
+}
+
+/** 펼친 줄: 지나간 해역(들어간 때의 계절)과 비교 포함 여부 바꾸기. */
+function renderDetail(record, detailId) {
+  const row = el('tr', 'vl-detail');
+  row.id = detailId;
+  const cell = el('td');
+  cell.colSpan = COLUMN_COUNT;
+  const regions = record.regions ?? [];
+  if (regions.length > 0) {
+    const list = el('ol', 'vl-regions');
+    list.setAttribute('aria-label', '지나간 해역');
+    for (const region of regions) {
+      const item = el('li', 'vl-region', region.name || region.regionId);
+      const season = seasonAt(region.at);
+      if (season) item.append(el('span', 'vl-mute', ` ${SEASON_LABELS[season]}`));
+      list.append(item);
+    }
+    cell.append(list);
+  } else {
+    cell.append(el('p', 'vl-mute', '지나간 해역 기록이 없습니다(이 기능을 넣기 전 항차이거나 해역을 바꾸지 않았습니다).'));
+  }
+  const line = el('p', 'vl-detail__line');
+  if (record.distance !== null && record.straight !== null && record.straight > 0) {
+    line.append(`이동 거리 직선의 ${(record.distance / record.straight).toFixed(1)}배`);
+  } else {
+    line.append('이동 거리를 몰라 우회를 판정하지 않았습니다');
+  }
+  const included = includedInComparison(record);
+  const toggle = el('button', 'vl-link', included ? '비교에서 빼기' : '비교에 넣기');
+  toggle.type = 'button';
+  toggle.dataset.recordId = record.recordId;
+  toggle.dataset.role = 'compare';
+  toggle.addEventListener('click', () => {
+    const mode = nextCompareMode(record);
+    commit(storage, (values) => {
+      const stored = normalizeRecords(values[RECORDS_KEY]);
+      const next = setRecordCompare(stored, record.recordId, mode);
+      return next === stored ? [] : [{ kind: 'set', key: RECORDS_KEY, value: next }];
+    }).catch(() => showStatus('바꾸지 못했습니다. 잠시 뒤 다시 시도하세요.'));
+  });
+  line.append(' · ', toggle);
+  cell.append(line);
+  row.append(cell);
+  return row;
+}
+
 function renderRows() {
+  // 줄을 모두 새로 그리므로, 누르던 펼치기·비교 버튼의 키보드 포커스를 다시 그린 같은 버튼으로 돌려준다.
+  const focused = document.activeElement;
+  const focusKey = focused && focused.dataset && focused.dataset.recordId
+    ? { recordId: focused.dataset.recordId, role: focused.dataset.role }
+    : null;
   const rows = [];
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index];
     const row = el('tr');
-    row.append(el('td', null, formatShortDate(record.arrivedAt)));
-    const route = el('td', null, `${nameOf(record.from, UNKNOWN_DEPARTURE)} → `);
+    row.append(el('td', 'vl-time', formatTimeRange(record.departedAt, record.arrivedAt)));
+    row.append(el('td', null, formatSeason(record)));
+    const route = el('td');
+    const open = expanded.has(record.recordId);
+    const detailId = detailIdOf(record.recordId);
+    const button = el('button', 'vl-expand', open ? '▾' : '▸');
+    button.type = 'button';
+    button.dataset.recordId = record.recordId;
+    button.dataset.role = 'expand';
+    button.setAttribute('aria-expanded', String(open));
+    button.setAttribute('aria-controls', detailId);
+    button.setAttribute('aria-label', open ? '상세 접기' : '상세 펼치기');
+    button.addEventListener('click', () => {
+      if (expanded.has(record.recordId)) expanded.delete(record.recordId);
+      else expanded.add(record.recordId);
+      renderRows();
+    });
+    route.append(button, `${departureName(record)} → `);
     route.append(el('span', record.to ? null : 'vl-mute', nameOf(record.to, UNKNOWN_PLACE)));
     if (!record.final) route.append(el('span', 'vl-mute', ' (확정 전)'));
+    if (!includedInComparison(record) && record.compare === 'auto') route.append(el('span', 'vl-detour', '우회'));
     row.append(route);
     row.append(el('td', 'vl-num', formatDays(record.sailingDays)));
     row.append(el('td', 'vl-num', formatKnots(record.knots)));
@@ -118,8 +209,15 @@ function renderRows() {
     if (comparison.kind === 'diff' && comparison.diff > 0.05) tone = 'vl-slower';
     row.append(el('td', `vl-num ${tone}`, formatDiff(comparison)));
     rows.push(row);
+    if (open) rows.push(renderDetail(record, detailId));
   }
   els.rows.replaceChildren(...rows);
+  if (focusKey) {
+    const again = [...els.rows.querySelectorAll('button')].find((node) => (
+      node.dataset.recordId === focusKey.recordId && node.dataset.role === focusKey.role
+    ));
+    if (again) again.focus();
+  }
   els.recordsEmpty.hidden = records.length > 0;
   els.count.textContent = records.length > 0 ? `${records.length} / 500항차` : '';
   els.exportButton.disabled = records.length === 0;
