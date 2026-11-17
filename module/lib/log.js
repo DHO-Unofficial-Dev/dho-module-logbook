@@ -11,7 +11,10 @@
 //   { voyageId, recordId, from: Place | null, fromEstimated, to: Place | null, departedAt, arrivedAt, endedAt,
 //     metrics: Metrics | null, regions: RegionVisit[],
 //     carriedDistance, carriedElapsed,   이어 온 앞 Navigator 항차들의 거리·시간 합
+//     carriedIdle,                       이어 온 앞 Navigator 항차들의 멈춰 있던 시간 합
 //     voyageDistance, voyageElapsed,     지금 Navigator 항차 하나의 판독값
+//     voyageIdle,                        지금 Navigator 항차 하나에서 멈춰 있던 시간(정박·정지, 평균 속도에서 뺀다)
+//     idleBaseDistance, idleBaseElapsed, 멈춤 판단의 기준점(지금 Navigator 항차의 마지막 정상 판독값)
 //     gapStartedAt, gapEndedAt }         마지막 판독 끊김 구간의 시작(처음 본 끊김)·끝(다시 본 정상 판독) 시각(잇기 판단)
 // Departure (voyage.started보다 먼저 온 출항. 다음 항차의 출발지가 된다)
 //   { from: Place | null, at }
@@ -23,7 +26,8 @@
 //   { sailingDays, knots, distance }
 // Record (최신이 앞, recordId = 처음 항차 voyageId, voyageId = 마지막으로 이어 받은 항차)
 //   { recordId, voyageId, from, fromEstimated, to, sailingDays, knots, distance, straight, regions, compare,
-//     departedAt, arrivedAt, final, carriedDistance, carriedElapsed }
+//     departedAt, arrivedAt, final, carriedDistance, carriedElapsed, carriedIdle,
+//     voyageIdle, idleBaseDistance, idleBaseElapsed }   같은 항차를 다시 열 때 평균 속도를 이어 재는 값(없으면 0·null)
 //   distance: 항차 이동 거리(월드 단위), straight: 출발·도착 거점 직선 거리, compare: 'auto' | 'include' | 'exclude'
 
 export const MAX_RECORDS = 500;
@@ -39,6 +43,17 @@ export const DETOUR_REGION_VISITS = 3;
 export const DEPARTURE_ESTIMATE_RADIUS = 120;
 /** 첫 측량 위치는 항차를 연 시각 근처의 것만 쓴다(그 뒤 지나가는 도시를 출발지로 잡지 않게). */
 export const DEPARTURE_ESTIMATE_WINDOW_MS = 60_000;
+/**
+ * 같은 항차의 두 판독 사이 속도가 이보다 느리면 그 사이 시간은 멈춰 있던 것으로 보고 평균 속도에서 뺀다.
+ * Navigator 항차는 입항해도 다음 출항까지 이어지고 정박 중에도 경과 시간이 늘어난다. 정박 중 판독 흔들림으로 거리가 조금
+ * 늘어도 이 속도에 한참 못 미치고, 실제 항해는 이보다 훨씬 빠르다. 바다 위에서 닻을 내린 시간도 같이 빠진다.
+ */
+export const IDLE_KNOTS = 1;
+/**
+ * 멈춤은 이 시간 이상 이어진 구간으로만 판단한다. 측량 좌표는 정수이고 판독이 1초에 몇 번씩 오므로, 항해 중에도 좌표가
+ * 그대로인 판독 쌍이 흔하다(10노트가 초당 약 3). 짧은 구간 하나로 멈춤을 판단하면 항해 시간이 빠져 평균 속도가 부푼다.
+ */
+export const IDLE_MIN_SPAN_MS = 30_000;
 const WORLD_WIDTH = 16384;
 const COMPARE_MODES = new Set(['auto', 'include', 'exclude']);
 
@@ -105,6 +120,10 @@ export function normalizeRecord(value) {
     final: value.final !== false,
     carriedDistance: finiteOrNull(value.carriedDistance) ?? 0,
     carriedElapsed: finiteOrNull(value.carriedElapsed) ?? 0,
+    carriedIdle: finiteOrNull(value.carriedIdle) ?? 0,
+    voyageIdle: finiteOrNull(value.voyageIdle) ?? 0,
+    idleBaseDistance: finiteOrNull(value.idleBaseDistance),
+    idleBaseElapsed: finiteOrNull(value.idleBaseElapsed),
   };
 }
 
@@ -128,8 +147,13 @@ export function normalizeLeg(value) {
     recordId: stringOrNull(value.recordId) ?? voyageId,
     carriedDistance: finiteOrNull(value.carriedDistance) ?? 0,
     carriedElapsed: finiteOrNull(value.carriedElapsed) ?? 0,
+    carriedIdle: finiteOrNull(value.carriedIdle) ?? 0,
     voyageDistance: finiteOrNull(value.voyageDistance),
     voyageElapsed: finiteOrNull(value.voyageElapsed),
+    voyageIdle: finiteOrNull(value.voyageIdle) ?? 0,
+    // 기준점이 없던 때 저장한 항차는 마지막 판독값을 기준점으로 쓴다(그 뒤 정박 시간도 뺄 수 있게).
+    idleBaseDistance: 'idleBaseElapsed' in value ? finiteOrNull(value.idleBaseDistance) : finiteOrNull(value.voyageDistance),
+    idleBaseElapsed: 'idleBaseElapsed' in value ? finiteOrNull(value.idleBaseElapsed) : finiteOrNull(value.voyageElapsed),
     gapStartedAt: finiteOrNull(value.gapStartedAt),
     gapEndedAt: finiteOrNull(value.gapEndedAt),
     endedAt: finiteOrNull(value.endedAt),
@@ -190,6 +214,10 @@ export function legToRecord(leg, final, at) {
     final,
     carriedDistance: leg.carriedDistance ?? 0,
     carriedElapsed: leg.carriedElapsed ?? 0,
+    carriedIdle: leg.carriedIdle ?? 0,
+    voyageIdle: leg.voyageIdle ?? 0,
+    idleBaseDistance: leg.idleBaseDistance ?? null,
+    idleBaseElapsed: leg.idleBaseElapsed ?? null,
   };
 }
 
@@ -234,8 +262,12 @@ export function continueLeg(leg, voyageId) {
     recordId: leg.recordId ?? leg.voyageId,
     carriedDistance: (leg.carriedDistance ?? 0) + (leg.voyageDistance ?? 0),
     carriedElapsed: (leg.carriedElapsed ?? 0) + (leg.voyageElapsed ?? 0),
+    carriedIdle: (leg.carriedIdle ?? 0) + (leg.voyageIdle ?? 0),
     voyageDistance: null,
     voyageElapsed: null,
+    voyageIdle: 0,
+    idleBaseDistance: null,
+    idleBaseElapsed: null,
     gapStartedAt: null,
     gapEndedAt: null,
     endedAt: null,
@@ -464,6 +496,9 @@ export function applyVoyage(state, snapshot, toKnots) {
     // Navigator를 켠 직후 snapshot은 방금 끝난(입항해 멈춘) 앞 항차를 줄 수 있다. 기록에 없는 항차는 실제로 항해 중일 때만
     // 연다. 그러지 않으면 이어 오는 출항 판정이 그 낡은 항차에 붙어 "출발지 → 도착지 모름" 항차가 하나 더 생긴다.
     if (!known && snapshot.state !== undefined && snapshot.state !== 'underway') return none;
+    // 확정한 항차도 항해 중이 아닌 snapshot(voyage.ended 뒤 늦게 온 정박 중 판독 등)으로는 다시 열지 않는다.
+    // 다시 열면 다음 항차로 넘어갈 때 정박 시간이 든 값으로 한 번 더 확정된다.
+    if (known && known.final !== false && snapshot.state !== undefined && snapshot.state !== 'underway') return none;
     // 사용자가 지운 뒤라도 같은 항차를 다시 열 뿐이다. 앞 항차는 확정한다.
     const at = finiteOrNull(snapshot.emittedAtUnixMillis) ?? 0;
     // canContinueLeg는 snapshot으로 연 항차를 잇지 않으므로 justDeparted(snapshot으로 연 항차만)와 겹치지 않는다.
@@ -492,21 +527,60 @@ export function applyVoyage(state, snapshot, toKnots) {
           regions: known.regions ?? [],
           carriedDistance: known.voyageId === metrics.voyageId ? known.carriedDistance ?? 0 : 0,
           carriedElapsed: known.voyageId === metrics.voyageId ? known.carriedElapsed ?? 0 : 0,
+          carriedIdle: known.voyageId === metrics.voyageId ? known.carriedIdle ?? 0 : 0,
+          // 기록할 때의 멈춘 시간과 기준점을 이어 받아, 다시 연 뒤 첫 판독까지의 정박 시간도 뺀다.
+          voyageIdle: known.voyageId === metrics.voyageId ? known.voyageIdle ?? 0 : 0,
+          idleBaseDistance: known.voyageId === metrics.voyageId ? known.idleBaseDistance ?? null : null,
+          idleBaseElapsed: known.voyageId === metrics.voyageId ? known.idleBaseElapsed ?? null : null,
         }
         : { ...openLeg(metrics.voyageId, pending, finiteOrNull(snapshot.startedAtUnixMillis) ?? at), openedBySnapshot: true };
       if (!known) pending = null;
     }
     switched = true;
   }
-  // 이어 온 항차가 있으면 거리·시간을 합쳐 평균 속도를 다시 잰다.
-  const carriedDistance = current.carriedDistance ?? 0;
-  const carriedElapsed = current.carriedElapsed ?? 0;
+  // 멈춰 있던 시간을 잰다. Navigator 항차는 입항해도 다음 출항까지 이어져 정박 중에도 경과 시간이 늘어나므로, 그대로
+  // 나누면 정박 시간이 평균 속도를 깎는다. 기준점과 이번 판독 사이가 IDLE_MIN_SPAN_MS 이상이고 그 사이 속도가
+  // IDLE_KNOTS보다 느리면 그 사이 시간을 멈춘 시간으로 본다.
+  // - 기준점이 없으면(항차를 막 열었거나 이어 받음) 이번 판독을 기준점으로만 잡는다. 경과 시간이나 거리가 거꾸로 가면
+  //   멈춘 시간에 넣지 않고 기준점만 새로 잡는다.
+  // - 정상 판독(tracking)이면 그 사이 속도가 IDLE_KNOTS 이상일 때 기준점을 옮기고, 느린 채로 IDLE_MIN_SPAN_MS가 지나면
+  //   멈춘 시간을 확정해 더하고 기준점을 옮긴다. 느리지만 짧은 구간은 기준점을 두고 더 지켜본다.
+  // - 정상 판독이 아니면(정박 중 paused, 판독 끊김) 기준점을 두고 멈춘 시간을 잠정으로만 뺀다. 바다에서 판독이 끊긴
+  //   것이면 다음 정상 판독이 기준점부터 움직인 거리를 보여 주므로 확정하지 않고, 정박이면 출항 뒤 첫 정상 판독에서
+  //   확정된다. 확정 전에 항차가 끝나도(voyage.ended) 잠정값을 뺀 평균 속도가 남는다.
+  const live = typeof snapshot.trackingQuality === 'string'
+    ? snapshot.trackingQuality === 'tracking'
+    : snapshot.state !== 'paused';
+  const baseDistance = current.idleBaseDistance ?? null;
+  const baseElapsed = current.idleBaseElapsed ?? null;
+  let voyageIdle = current.voyageIdle ?? 0;
+  let idleBaseDistance = baseDistance;
+  let idleBaseElapsed = baseElapsed;
+  let pendingIdle = 0;
+  if (metrics.distance !== null && metrics.elapsed !== null) {
+    const spent = baseElapsed === null ? 0 : metrics.elapsed - baseElapsed;
+    const moved = baseDistance === null ? 0 : metrics.distance - baseDistance;
+    const slow = spent > 0 && (finiteOrNull(toKnots(moved / (spent / 1000))) ?? IDLE_KNOTS) < IDLE_KNOTS;
+    const stopped = slow && moved >= 0 && spent >= IDLE_MIN_SPAN_MS;
+    const rebase = baseDistance === null || baseElapsed === null || spent < 0 || moved < 0;
+    if (spent < 0) voyageIdle = Math.min(voyageIdle, Math.max(metrics.elapsed, 0));
+    if (live && stopped) voyageIdle += spent;
+    else if (!live && stopped) pendingIdle = spent;
+    if (rebase || (live && (stopped || (spent > 0 && !slow)))) {
+      idleBaseDistance = metrics.distance;
+      idleBaseElapsed = metrics.elapsed;
+    }
+  }
+  const voyageDistance = metrics.distance ?? current.voyageDistance ?? null;
+  const voyageElapsed = metrics.elapsed ?? current.voyageElapsed ?? null;
+  // 평균 속도 = (이어 온 거리 + 이 항차 거리) ÷ (경과 시간 합 − 멈춘 시간 합).
   let { knots } = metrics;
   let distance = metrics.distance;
-  if ((carriedDistance > 0 || carriedElapsed > 0) && metrics.distance !== null) {
-    distance = carriedDistance + metrics.distance;
-    const elapsed = carriedElapsed + (metrics.elapsed ?? 0);
-    knots = elapsed >= 10_000 && distance > 0 ? finiteOrNull(toKnots(distance / (elapsed / 1000))) : null;
+  if (metrics.distance !== null) {
+    distance = (current.carriedDistance ?? 0) + metrics.distance;
+    const elapsed = (current.carriedElapsed ?? 0) + (metrics.elapsed ?? 0);
+    const moving = elapsed - (current.carriedIdle ?? 0) - voyageIdle - pendingIdle;
+    knots = moving >= 10_000 && distance > 0 ? finiteOrNull(toKnots(distance / (moving / 1000))) : null;
   }
   const prev = current.metrics ?? { sailingDays: null, knots: null, distance: null };
   const merged = {
@@ -516,25 +590,30 @@ export function applyVoyage(state, snapshot, toKnots) {
   };
   const daysChanged = merged.sailingDays !== prev.sailingDays;
   if (!switched && !daysChanged && merged.knots === prev.knots && merged.distance === prev.distance) {
-    // 표시 값은 그대로여도 판독 시각과 이 항차 경과 시간은 메모리에 남긴다(이어 붙일 때 시간 합에 쓴다).
-    const elapsed = metrics.elapsed ?? current.voyageElapsed ?? null;
-    if (!marked && elapsed === current.voyageElapsed) return none;
-    current = { ...current, voyageElapsed: elapsed };
-    return { state: { ...state, current }, upsert: null, changed: true, persist: false };
+    // 표시 값은 그대로여도 기준점·멈춘 시간은 메모리에 남긴다(다음 판독의 멈춤 판단과 이어 붙일 때 시간 합에 쓴다).
+    if (!marked && voyageDistance === current.voyageDistance && voyageElapsed === current.voyageElapsed
+      && voyageIdle === (current.voyageIdle ?? 0) && idleBaseDistance === baseDistance
+      && idleBaseElapsed === baseElapsed) return none;
+    // 멈춘 시간을 확정했으면 저장한다. 그 사이 다시 켜지면 확정한 멈춤이 사라져 평균 속도가 낮게 나오기 때문이다.
+    const idleConfirmed = voyageIdle !== (current.voyageIdle ?? 0);
+    current = { ...current, voyageDistance, voyageElapsed, voyageIdle, idleBaseDistance, idleBaseElapsed };
+    return { state: { ...state, current }, upsert: null, changed: true, persist: idleConfirmed };
   }
-  current = {
-    ...current,
-    metrics: merged,
-    voyageDistance: metrics.distance ?? current.voyageDistance ?? null,
-    voyageElapsed: metrics.elapsed ?? current.voyageElapsed ?? null,
+  const idleConfirmed = voyageIdle !== (current.voyageIdle ?? 0);
+  current = { ...current, metrics: merged, voyageDistance, voyageElapsed, voyageIdle, idleBaseDistance, idleBaseElapsed };
+  return {
+    state: { ...state, current, pending, records },
+    upsert,
+    changed: true,
+    persist: switched || daysChanged || idleConfirmed,
   };
-  return { state: { ...state, current, pending, records }, upsert, changed: true, persist: switched || daysChanged };
 }
 
 /**
  * voyage snapshot에서 기록용 값을 고른다. `toKnots`는 월드 단위/초를 knot로 바꾸는 함수(SDK `geo.mapSpeedToKnots`).
  * 항해일수는 게임 화면 항해일수의 마지막 값(`lastSailingDays`, 차이가 아니다)이다.
- * 평균 속도는 이동 거리 ÷ 경과 시간이다. 경과 시간은 판독 공백을 포함하므로 공백이 있던 항차는 조금 낮게 나온다.
+ * 여기 knots는 이 snapshot 하나의 이동 거리 ÷ 경과 시간이다. 기록의 평균 속도는 applyVoyage가 멈춰 있던 시간
+ * (기준점과 판독 사이 IDLE_KNOTS보다 느린 구간: 정박·정지)을 경과 시간에서 빼고 이어 온 항차를 합쳐 다시 잰다.
  */
 export function metricsFromVoyage(snapshot, toKnots) {
   if (!isObject(snapshot)) return null;

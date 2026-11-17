@@ -106,6 +106,166 @@ test('정상 항해: ended(앞) → started → departed → 입항, 다음 출�
   assert.deepEqual(after.current.from, LONDON);
 });
 
+test('입항 뒤 정박 시간은 평균 속도에 넣지 않는다(확정 때 값이 입항 때 값과 같다)', () => {
+  const { state } = run([
+    ev('voyage.started', { voyageId: 'v1' }),
+    ev('shore.departed', { shoreContext: 'port', nearestPoiId: 'poi-lisbon' }),
+    snap('v1', 11),
+    ev('shore.arrived', { shoreContext: 'port', nearestPoiId: 'poi-london' }),
+  ]);
+  assert.equal(state.records[0].knots, 8.4);
+  // 정박하는 동안 같은 항차의 경과 시간만 늘어난다(거리 그대로).
+  const after = run([
+    snap('v1', 11, { state: 'paused', elapsedMillis: 400_000, emittedAtUnixMillis: 20_000 }),
+    snap('v1', 11, { state: 'paused', elapsedMillis: 900_000, emittedAtUnixMillis: 30_000 }),
+    ev('voyage.ended', { voyageId: 'v1' }),
+    ev('voyage.started', { voyageId: 'v2' }),
+    ev('shore.departed', { shoreContext: 'port', nearestPoiId: 'poi-london' }),
+  ], state).state;
+  assert.equal(after.records[0].final, true);
+  assert.equal(after.records[0].knots, 8.4);
+  assert.equal(after.records[0].distance, 840);
+});
+
+test('입항 판정 뒤에도 실제로 더 움직였으면 평균 속도를 계속 잰다', () => {
+  const { state } = run([
+    ev('voyage.started', { voyageId: 'v1' }),
+    snap('v1', 3),
+    ev('shore.arrived', { shoreContext: 'port', nearestPoiId: 'poi-london' }),
+    snap('v1', 4, { distanceTravelled: 1_200, elapsedMillis: 120_000, emittedAtUnixMillis: 20_000 }),
+  ]);
+  assert.equal(state.current.metrics.knots, 10);
+  assert.equal(state.current.metrics.distance, 1_200);
+});
+
+// 리스본 → 런던 입항(840 / 100초 = 8.4노트)
+const arrivedLondon = () => run([
+  ev('voyage.started', { voyageId: 'v1' }),
+  ev('shore.departed', { shoreContext: 'port', nearestPoiId: 'poi-lisbon' }),
+  snap('v1', 11),
+  ev('shore.arrived', { shoreContext: 'port', nearestPoiId: 'poi-london' }),
+]).state;
+
+test('voyage.ended 뒤 늦게 온 정박 중 snapshot으로 확정한 기록을 다시 열지 않는다', () => {
+  const arrived = arrivedLondon();
+  const ended = run([
+    snap('v1', 11, { state: 'paused', elapsedMillis: 900_000, emittedAtUnixMillis: 30_000 }),
+    ev('voyage.ended', { voyageId: 'v1' }),
+  ], arrived).state;
+  assert.equal(ended.records[0].final, true);
+  assert.equal(ended.records[0].knots, 8.4);
+  const late = applyVoyage(ended, snap('v1', 11, { state: 'paused', elapsedMillis: 910_000, emittedAtUnixMillis: 40_500 }), toKnots);
+  assert.equal(late.changed, false);
+  assert.equal(late.state.current, null);
+  const after = run([
+    ev('voyage.started', { voyageId: 'v2' }),
+    ev('shore.departed', { shoreContext: 'port', nearestPoiId: 'poi-london' }),
+  ], late.state).state;
+  assert.equal(after.records.length, 1);
+  assert.equal(after.records[0].knots, 8.4);
+});
+
+test('확정 전 기록을 정박 중 snapshot으로 다시 열어도 저장한 기준점으로 정박 시간을 뺀다', () => {
+  // Navigator를 다시 켰을 때처럼 지금 항차 없이 기록만 남았다.
+  const restarted = { ...emptyState(), records: arrivedLondon().records };
+  assert.equal(restarted.records[0].final, false);
+  const after = run([
+    snap('v1', 11, { state: 'paused', elapsedMillis: 900_000, emittedAtUnixMillis: 30_000 }),
+    ev('voyage.ended', { voyageId: 'v1' }),
+  ], restarted).state;
+  assert.equal(after.records[0].final, true);
+  assert.equal(after.records[0].knots, 8.4);
+});
+
+test('출항 직후 앞 항차 판독이 조금 움직여도 정박 시간은 평균 속도에서 빠진다', () => {
+  const arrived = arrivedLondon();
+  const after = run([
+    snap('v1', 11, { state: 'paused', elapsedMillis: 900_000, emittedAtUnixMillis: 30_000 }),
+    ev('shore.departed', { shoreContext: 'port', nearestPoiId: 'poi-london' }),
+    snap('v1', 11, { distanceTravelled: 841, elapsedMillis: 901_000, emittedAtUnixMillis: 31_000 }),
+    snap('v2', 0, { distanceTravelled: 2, elapsedMillis: 1_000, emittedAtUnixMillis: 32_000 }),
+  ], arrived).state;
+  const v1 = after.records.find((item) => item.recordId === 'v1');
+  assert.equal(v1.final, true);
+  assert.equal(v1.distance, 841);
+  // 입항 판독부터 출항 뒤 판독까지 801초 동안 1만큼 움직였다: 멈춘 시간으로 본다.
+  assert.equal(v1.knots, 841 / 100);
+});
+
+test('정박 중 판독 흔들림으로 거리가 조금 늘어도 정박 시간은 평균 속도에서 빠진다', () => {
+  const arrived = arrivedLondon();
+  const after = run([
+    snap('v1', 11, { state: 'paused', trackingQuality: 'stale', distanceTravelled: 840.5, elapsedMillis: 900_000, emittedAtUnixMillis: 30_000 }),
+    ev('voyage.ended', { voyageId: 'v1' }),
+  ], arrived).state;
+  assert.equal(after.records[0].final, true);
+  assert.equal(after.records[0].knots, 840.5 / 100);
+});
+
+test('항해 중 좌표가 그대로인 짧은 판독 쌍은 멈춘 시간으로 치지 않는다', () => {
+  // 1초마다 판독, 좌표는 정수라 0과 4가 번갈아 늘어난다(평균 2노트).
+  const steps = [ev('voyage.started', { voyageId: 'v1' })];
+  for (let second = 0; second <= 60; second += 1) {
+    steps.push(snap('v1', 3, {
+      trackingQuality: 'tracking',
+      distanceTravelled: 840 + Math.ceil(second / 2) * 4,
+      elapsedMillis: 100_000 + second * 1000,
+      emittedAtUnixMillis: 10_000 + second * 1000,
+    }));
+  }
+  const { state } = run(steps);
+  assert.equal(state.current.voyageIdle, 0);
+  assert.equal(state.current.metrics.knots, (840 + 120) / 160);
+});
+
+test('바다 위에서 멈춰 있던 시간(닻)도 평균 속도에서 빠진다', () => {
+  const { state } = run([
+    ev('voyage.started', { voyageId: 'v1' }),
+    snap('v1', 3, { trackingQuality: 'tracking' }),
+    // 정상 판독인 채로 300초 멈춤
+    snap('v1', 3, { trackingQuality: 'tracking', elapsedMillis: 400_000, emittedAtUnixMillis: 20_000 }),
+    snap('v1', 4, { trackingQuality: 'tracking', distanceTravelled: 1_100, elapsedMillis: 430_000, emittedAtUnixMillis: 21_000 }),
+  ]);
+  assert.equal(state.current.voyageIdle, 300_000);
+  assert.equal(state.current.metrics.knots, 1_100 / 130);
+});
+
+test('바다에서 판독이 끊긴 동안 거리가 그대로여도, 다시 판독됐을 때 움직였으면 멈춘 시간으로 치지 않는다', () => {
+  const { state } = run([
+    ev('voyage.started', { voyageId: 'v1' }),
+    snap('v1', 3, { trackingQuality: 'tracking' }),
+    snap('v1', 3, { trackingQuality: 'stale', elapsedMillis: 130_000, emittedAtUnixMillis: 20_000 }),
+    snap('v1', 3, { trackingQuality: 'tracking', distanceTravelled: 1_260, elapsedMillis: 150_000, emittedAtUnixMillis: 21_000 }),
+  ]);
+  assert.equal(state.current.voyageIdle, 0);
+  assert.equal(state.current.metrics.knots, 1_260 / 150);
+});
+
+test('정박 중 항해일수가 바뀌면 일수는 따르고 평균 속도는 지킨다', () => {
+  const result = applyVoyage(arrivedLondon(), snap('v1', 12, { state: 'paused', elapsedMillis: 900_000, emittedAtUnixMillis: 30_000 }), toKnots);
+  assert.equal(result.persist, true);
+  assert.equal(result.state.current.metrics.sailingDays, 12);
+  assert.equal(result.state.current.metrics.knots, 8.4);
+});
+
+test('멈춘 시간 필드가 없는 옛 저장값도 읽는다', () => {
+  const [old] = normalizeRecords([{ recordId: 'v1', voyageId: 'v1', from: LISBON, to: LONDON, sailingDays: 11, knots: 8.4, distance: 840, departedAt: 1, arrivedAt: 2, final: false }]);
+  assert.equal(old.carriedIdle, 0);
+  assert.equal(old.voyageIdle, 0);
+  assert.equal(old.idleBaseDistance, null);
+  assert.equal(old.idleBaseElapsed, null);
+  // 옛 지금 항차는 마지막 판독값을 기준점으로 써서 그 뒤 정박 시간을 뺀다.
+  const leg = normalizeLeg({
+    voyageId: 'v1', from: LISBON, to: LONDON, departedAt: 1, arrivedAt: 2,
+    voyageDistance: 840, voyageElapsed: 100_000, metrics: { sailingDays: 11, knots: 8.4, distance: 840 },
+  });
+  assert.equal(leg.voyageIdle, 0);
+  assert.equal(leg.carriedIdle, 0);
+  assert.equal(leg.idleBaseElapsed, 100_000);
+  const after = applyVoyage({ ...emptyState(), current: leg }, snap('v1', 11, { state: 'paused', elapsedMillis: 900_000 }), toKnots);
+  assert.equal(after.state.current.metrics.knots, 8.4);
+});
+
 test('도착지는 그 항차 동안 받은 마지막 shore.arrived다', () => {
   const { state } = run([
     ev('voyage.started', { voyageId: 'v3' }),

@@ -124,6 +124,57 @@ test('두 번 연속 이어져도 거리·시간을 모두 합친다', () => {
   assert.equal(state.records[0].knots, 100 / 57);
 });
 
+test('이어 받은 직후 입항해도, 실제로 더 움직이면 평균 속도를 계속 잰다', () => {
+  const state = run([
+    ...departAndInterrupt(),
+    ev('voyage.ended', { voyageId: 'v1' }, 43_000),
+    ev('voyage.started', { voyageId: 'v2' }, 43_000),
+    ev('shore.arrived', { shoreContext: 'port', nearestPoiId: 'poi-london' }, 44_000),
+    tracking('v2', 60_000, { distanceTravelled: 500, elapsedMillis: 50_000 }),
+  ]);
+  assert.equal(state.current.voyageId, 'v2');
+  assert.equal(state.current.metrics.distance, 560);
+  // 60 + 500 거리 ÷ 31초 + 50초
+  assert.equal(state.current.metrics.knots, 560 / 81);
+});
+
+test('이어 받은 항차의 멈춘 시간도 합쳐 뺀다', () => {
+  const state = run([
+    ev('voyage.started', { voyageId: 'v1' }, 10_000),
+    ev('shore.departed', { shoreContext: 'port', nearestPoiId: 'poi-lisbon' }, 10_000),
+    tracking('v1', 20_000, { distanceTravelled: 60, elapsedMillis: 10_000 }),
+    // 바다에서 40초 멈춤(정상 판독)
+    tracking('v1', 50_000, { distanceTravelled: 60, elapsedMillis: 50_000 }),
+    stale('v1', 51_000, { distanceTravelled: 60, elapsedMillis: 51_000 }),
+    ev('voyage.ended', { voyageId: 'v1' }, 53_000),
+    ev('voyage.started', { voyageId: 'v2' }, 53_000),
+    tracking('v2', 68_000, { distanceTravelled: 30, elapsedMillis: 15_000 }),
+    ev('shore.arrived', { shoreContext: 'port', nearestPoiId: 'poi-london' }, 69_000),
+  ]);
+  assert.equal(state.records.length, 1);
+  assert.equal(state.records[0].carriedIdle, 40_000);
+  // 90 거리 ÷ (51초 + 15초 − 40초)
+  assert.equal(state.records[0].knots, 90 / 26);
+});
+
+test('이어 받은 직후 입항해 정박 중 판독만 와도 정박 시간을 뺀다', () => {
+  const arrived = run([
+    ...departAndInterrupt(),
+    ev('voyage.ended', { voyageId: 'v1' }, 43_000),
+    ev('voyage.started', { voyageId: 'v2' }, 43_000),
+    ev('shore.arrived', { shoreContext: 'port', nearestPoiId: 'poi-london' }, 44_000),
+    snap('v2', 0, { state: 'paused', trackingQuality: 'stale', distanceTravelled: 30, elapsedMillis: 15_000, emittedAtUnixMillis: 45_000 }),
+  ]);
+  // 60 + 30 거리 ÷ 31초 + 15초
+  assert.equal(arrived.current.metrics.knots, 90 / 46);
+  const state = run([
+    snap('v2', 0, { state: 'paused', trackingQuality: 'stale', distanceTravelled: 30, elapsedMillis: 900_000, emittedAtUnixMillis: 930_000 }),
+    ev('voyage.ended', { voyageId: 'v2' }, 931_000),
+  ], arrived);
+  assert.equal(state.records[0].final, true);
+  assert.equal(state.records[0].knots, 90 / 46);
+});
+
 test('거점을 모르는 입항(상륙지 등) 뒤 정박하고 바뀐 항차는 잇지 않는다', () => {
   const state = run([
     ev('voyage.started', { voyageId: 'v1' }, 10_000),
