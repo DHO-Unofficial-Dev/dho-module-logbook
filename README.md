@@ -86,8 +86,8 @@ npm test
 
 # 3. 검증, 빌드, archive 검사
 node .tools/tools/validate-module.mjs module
-node .tools/tools/build-module.mjs module dist/logbook-1.0.0.dho-module
-node .tools/tools/verify-module.mjs dist/logbook-1.0.0.dho-module
+node .tools/tools/build-module.mjs module dist/logbook-1.0.1.dho-module
+node .tools/tools/verify-module.mjs dist/logbook-1.0.1.dho-module
 ```
 
 각 명령은 한 줄 JSON을 출력하며 `status`가 `valid`면 통과입니다. 편집기 타입 지원이 필요하면 공개 도구의
