@@ -67,7 +67,7 @@ jobs:
           echo "VERSION=${version}" >> "$GITHUB_ENV"
 
       - name: 로직 검사
-        run: node --test test/
+        run: node --test "test/*.test.mjs"
 
       - name: 고정 도구 확인
         working-directory: .github/tools
