@@ -10,6 +10,7 @@
   },
   "license": "MIT",
   "minimumManagerVersion": "2.2.1",
+  "updateCheck": { "url": "https://dhoport.app/api/navigator/update/module/app.dhoport.logbook" },
   "sdkVersion": "1",
   "dockIcon": "assets/dock-icon.svg",
   "capabilities": [
