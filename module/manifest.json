@@ -9,7 +9,7 @@
     "name": "DHO PORT"
   },
   "license": "MIT",
-  "minimumManagerVersion": "2.2.0",
+  "minimumManagerVersion": "2.2.1",
   "sdkVersion": "1",
   "dockIcon": "assets/dock-icon.svg",
   "capabilities": [
