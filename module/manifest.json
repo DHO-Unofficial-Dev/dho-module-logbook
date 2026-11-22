@@ -1,15 +1,16 @@
 {
   "formatVersion": 1,
-  "moduleId": "dev.dho-unofficial.voyage-log",
+  "moduleId": "app.dhoport.logbook",
   "name": "Logbook",
-  "version": "1.0.1",
+  "version": "1.1.1",
   "description": "항해 일지. 항차마다 출발·도착 항구, 운행 시간·계절, 지나간 해역, 항해일수, 평균 속도를 기록하고 같은 구간의 지난 기록과 비교합니다. 도착하면 게임 화면에 짧은 알림을 띄웁니다. 기록은 이 PC에만 남습니다.",
   "publisher": {
-    "id": "dev.dho-unofficial",
-    "name": "DHO Unofficial Dev"
+    "id": "app.dhoport",
+    "name": "DHO PORT"
   },
   "license": "MIT",
-  "minimumManagerVersion": "2.2.0",
+  "minimumManagerVersion": "2.2.1",
+  "updateCheck": { "url": "https://dhoport.app/api/navigator/update/module/app.dhoport.logbook" },
   "sdkVersion": "1",
   "dockIcon": "assets/dock-icon.svg",
   "capabilities": [
@@ -39,7 +40,7 @@
   },
   "surfaces": [
     {
-      "surfaceId": "module.dev.dho-unofficial.voyage-log.panel",
+      "surfaceId": "module.app.dhoport.logbook.panel",
       "name": "panel",
       "label": "항차 기록",
       "contractVersion": 1,

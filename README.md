@@ -1,6 +1,6 @@
 # Logbook
 
-항해 일지. DHO Navigator 2.2.0용 Module입니다. 항차마다 출발·도착 항구, 걸린 항해일수, 평균 속도와 날짜를 기록하고
+항해 일지. DHO Navigator 2.2.1용 Module입니다. 항차마다 출발·도착 항구, 걸린 항해일수, 평균 속도와 날짜를 기록하고
 같은 구간(출발·도착 거점이 같은 항차)의 지난 기록과 비교합니다.
 
 - Navigator 본창의 Module 화면에서 "항차 기록" 패널을 엽니다. 패널을 닫아 둬도 background service가 계속 기록합니다.
@@ -86,13 +86,15 @@ npm test
 
 # 3. 검증, 빌드, archive 검사
 node .tools/tools/validate-module.mjs module
-node .tools/tools/build-module.mjs module dist/logbook-1.0.1.dho-module
-node .tools/tools/verify-module.mjs dist/logbook-1.0.1.dho-module
+node .tools/tools/build-module.mjs module dist/logbook-1.1.1.dho-module
+node .tools/tools/verify-module.mjs dist/logbook-1.1.1.dho-module
 ```
 
 각 명령은 한 줄 JSON을 출력하며 `status`가 `valid`면 통과입니다. 편집기 타입 지원이 필요하면 공개 도구의
-`sdk/index.d.ts`를 `.dho-sdk/index.d.ts`로 복사합니다(archive에는 넣지 않습니다). `v*` 태그를 push하면
-`.github/workflows/release.yml`이 같은 순서로 검사·빌드해 Release를 만듭니다.
+`sdk/index.d.ts`를 `.dho-sdk/index.d.ts`로 복사합니다(archive에는 넣지 않습니다). main에 있는 커밋에
+`v*` 태그를 push하면 `.github/workflows/release.yml`이 `.github/tools/`의 고정 도구로 같은 순서로 검사·빌드하고,
+DHO Navigator 공식 서명을 넣어 Release를 만듭니다. 직접 빌드한 파일에는 서명이 없어 `app.dhoport.logbook` ID로
+설치되지 않습니다. 직접 고쳐 쓰려면 자기 배포자 ID로 바꿔 빌드합니다.
 
 ### 프로젝트 구조
 

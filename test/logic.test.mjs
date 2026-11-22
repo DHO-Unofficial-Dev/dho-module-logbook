@@ -613,8 +613,8 @@ test('service 흐름: 패널이 지운 기록을 되살리지 않는다', async 
 
 test('manifest: 필요한 capability만, 설정 id와 service 코드가 맞다', () => {
   const manifest = JSON.parse(readFileSync(join(moduleDir, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.moduleId, 'dev.dho-unofficial.voyage-log');
-  assert.equal(manifest.publisher.id, 'dev.dho-unofficial');
+  assert.equal(manifest.moduleId, 'app.dhoport.logbook');
+  assert.equal(manifest.publisher.id, 'app.dhoport');
   assert.deepEqual(manifest.capabilities, [
     'files.user', 'navigation.read', 'notifications.show', 'service.background', 'settings.read', 'storage.local',
   ]);
