@@ -27,7 +27,7 @@ env:
   # 2.2.1 공개 키트가 나오면 그 파일과 바이트를 대조하고, 다르면 파일과 이 목록을 같은 커밋에서 함께 바꿉니다.
   # 아래 SHA-256과 다르면 모든 job이 멈춥니다.
   TOOL_SHA256SUMS: |
-    cb62ce89e1a0fa109fe995153642b3e80e83bae0958f6b93f31d5184927cf63a  module-tool-bundle.mjs
+    8628522bc4f82afbbc384a603e6aaa14342b2245f2f5f5f51fec43f100d2dc83  module-tool-bundle.mjs
     e75c06ae8e05a0cf44599786c8cd659f38a0d8f63d2129ce6b7848851fe84974  official-module.mjs
     250412b1d24d8c0ecdb5af90c1732e95040add12b850c2fd1f29e4983315022b  validate-module.mjs
     244d6e64aea25b90b4113034e063af914da45db41d227ec737516987e65f1ab2  build-module.mjs
