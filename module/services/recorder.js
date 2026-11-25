@@ -27,6 +27,7 @@ const recorder = createRecorder({
   resolver,
   getPoi,
   nearbyPort,
+  getPosition: async () => (await telemetry.getSnapshot()).position,
   toKnots: (value) => geo.mapSpeedToKnots(value),
   notify: (input) => notifications.show(input),
   toastEnabled: () => toastEnabled,
@@ -48,15 +49,16 @@ const [initial, voyageSnapshot] = await Promise.all([
 await recorder.start({ values: initial.values, voyage: voyageSnapshot });
 
 stops.push(await voyage.subscribe((snapshot) => { void recorder.voyage(snapshot); }));
-// 출발지를 모르는 항차(Navigator를 켠 직후 등)는 첫 측량 위치에서 가까운 도시로 채운다.
-stops.push(await telemetry.subscribe((snapshot) => { void recorder.position(snapshot.position); }));
 stops.push(await storage.subscribe((snapshot) => {
   if (!snapshot.changedKeys || snapshot.changedKeys.includes('records')) recorder.syncRecords(snapshot.values);
 }));
 
 let catalogRevision = null;
+let currentRegion = null;
 try {
   stops.push(await world.subscribe((snapshot) => {
+    currentRegion = snapshot.currentRegion;
+    void recorder.region(currentRegion);
     // 월드 카탈로그가 바뀌면 통합된 거점(redirect)이 달라질 수 있으므로 거점 캐시를 비운다.
     if (catalogRevision !== null && snapshot.catalogRevision !== catalogRevision) resolver.reset();
     catalogRevision = snapshot.catalogRevision;
@@ -64,6 +66,9 @@ try {
 } catch {
   // world를 줄 수 없는 Host(미리보기 등)에서는 기록할 때 남긴 거점 ID로 비교한다.
 }
+
+// 같은 판독의 해역 관측을 먼저 받아 속도를 해당 방문에 연결한다.
+stops.push(await telemetry.subscribe((snapshot) => { void recorder.telemetry(snapshot, currentRegion); }));
 
 addEventListener('dho-service-stop', () => {
   recorder.stop();

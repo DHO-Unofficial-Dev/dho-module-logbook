@@ -13,7 +13,14 @@ const MAX_ATTEMPTS = 5;
 export async function commit(storage, mutate) {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     const snapshot = await storage.getSnapshot();
-    const operations = mutate(snapshot.values ?? {});
+    const operations = mutate(snapshot.values ?? {}).map((operation) => {
+      if (operation.kind !== 'set' || operation.key !== RECORDS_KEY || !Array.isArray(operation.value)) return operation;
+      // 방문별 누적 통계를 문자열로 보관하여 전체 기록의 SDK JSON 노드 비용을 억제한다.
+      return { ...operation, value: operation.value.map(record => !Array.isArray(record?.regions) ? record : ({ ...record,
+        regions: (record.regions || []).map(region => region.stats && typeof region.stats === 'object'
+          ? { ...region, stats: JSON.stringify(region.stats) } : region),
+      })) };
+    });
     if (operations.length === 0) return snapshot;
     try {
       return await storage.batch({ expectedRevision: snapshot.revision, operations });

@@ -10,7 +10,6 @@ import {
   formatDays,
   formatDiff,
   formatKnots,
-  formatSeason,
   formatTimeRange,
   includedInComparison,
   metricsFromVoyage,
@@ -23,6 +22,7 @@ import {
   setRecordCompare,
   toCsv,
 } from '../../lib/log.js';
+import { regionStatsAverage } from '../../lib/region-stats.js';
 import { createResolver, placeIdsOf } from '../../lib/resolver.js';
 import { CURRENT_KEY, RECORDS_KEY, commit } from '../../lib/store.js';
 
@@ -109,11 +109,15 @@ function renderCompare() {
     const item = el('li');
     const latest = route.latest;
     item.append(el('span', 'vl-compare__route', `${nameOf(latest.from, UNKNOWN_DEPARTURE)} → ${nameOf(latest.to, UNKNOWN_PLACE)}`));
-    const stats = [route.stats.sameSeason ? `${SEASON_LABELS[route.stats.season]}` : '계절 무관'];
+    const stats = [];
+    const seasonStats = el('span', 'vl-compare__stats');
+    if (route.stats.sameSeason && route.stats.season) seasonStats.append(seasonIcon(route.stats.season));
+    else seasonStats.append('계절 무관');
     if (route.stats.best !== null) stats.push(`최고 ${formatDays(route.stats.best)}`);
     if (route.stats.average !== null) stats.push(`평균 ${(Math.round(route.stats.average * 10) / 10).toString()}일`);
     stats.push(`기록 ${route.stats.count}회`);
-    item.append(el('span', 'vl-compare__stats', ` · ${stats.join(' · ')}`));
+    seasonStats.append(` · ${stats.join(' · ')}`);
+    item.append(seasonStats);
     els.compare.append(item);
   }
   els.compareEmpty.hidden = shown.length > 0;
@@ -126,6 +130,27 @@ function detailIdOf(recordId) {
   return `detail-${recordId.replace(/[^A-Za-z0-9_-]/gu, '_')}`;
 }
 
+/** 계절 아이콘은 Host 강조색을 따르는 선 그림으로 표시한다. */
+function seasonIcon(season) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const icon = document.createElementNS(ns, 'svg');
+  icon.setAttribute('viewBox', '0 0 20 20');
+  icon.setAttribute('role', 'img');
+  icon.setAttribute('aria-label', SEASON_LABELS[season] || '계절 모름');
+  icon.classList.add('vl-season-icon');
+  icon.dataset.season = season;
+  const title = document.createElementNS(ns, 'title'); title.textContent = SEASON_LABELS[season] || '계절 모름'; icon.append(title);
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', season === 'summer'
+    ? 'M10 1v2m0 14v2M1 10h2m14 0h2M3.6 3.6 5 5m10 10 1.4 1.4M3.6 16.4 5 15M15 5l1.4-1.4M14 10a4 4 0 1 1-8 0 4 4 0 0 1 8 0'
+    : 'M10 1v18M2.2 5.5l15.6 9M2.2 14.5l15.6-9M7 3l3 3 3-3M7 17l3-3 3 3M3 7l4-1-1-4M17 13l-4 1 1 4M3 13l4 1-1 4M17 7l-4-1 1-4');
+  icon.append(path); return icon;
+}
+
+function regionNumber(value, digits = 1) {
+  return typeof value === 'number' && Number.isFinite(value) ? (digits ? value.toFixed(digits) : String(value)) : '—';
+}
+
 /** 펼친 줄: 지나간 해역(들어간 때의 계절)과 비교 포함 여부 바꾸기. */
 function renderDetail(record, detailId) {
   const row = el('tr', 'vl-detail');
@@ -134,15 +159,28 @@ function renderDetail(record, detailId) {
   cell.colSpan = COLUMN_COUNT;
   const regions = record.regions ?? [];
   if (regions.length > 0) {
-    const list = el('ol', 'vl-regions');
-    list.setAttribute('aria-label', '지나간 해역');
+    const list = el('div', 'vl-region-table');
+    list.setAttribute('role', 'table'); list.setAttribute('aria-label', '해역별 관측 항해일수와 속도(kn)');
+    const head = el('div', 'vl-region-row vl-region-head'); head.setAttribute('role', 'row');
+    for (const label of ['해역', '일수', '최저', '평균', '최고']) {
+      const column = el('span', null, label); column.setAttribute('role', 'columnheader'); head.append(column);
+    }
+    list.append(head);
     for (const region of regions) {
-      const item = el('li', 'vl-region', region.name || region.regionId);
-      const season = seasonAt(region.at);
-      if (season) item.append(el('span', 'vl-mute', ` ${SEASON_LABELS[season]}`));
-      list.append(item);
+      const segments = region.stats?.segments?.length ? region.stats.segments : [{ season: seasonAt(region.at) }];
+      for (const segment of segments) {
+        const line = el('div', 'vl-region-row'); line.setAttribute('role', 'row');
+        const name = el('span', 'vl-region-name'); name.setAttribute('role', 'rowheader');
+        const text = el('span', 'vl-region-name__text', region.name || region.regionId); text.title = region.name || region.regionId;
+        name.append(text); if (segment.season) name.append(seasonIcon(segment.season)); line.append(name);
+        for (const value of [regionNumber(segment.sailingDays, 0), regionNumber(segment.min), regionNumber(regionStatsAverage(segment)), regionNumber(segment.max)]) {
+          const number = el('span', 'vl-region-value', value); number.setAttribute('role', 'cell'); line.append(number);
+        }
+        list.append(line);
+      }
     }
     cell.append(list);
+    cell.append(el('p', 'vl-speed-note', '속도 kn · 일수는 연속 관측한 증가분 · 판독 공백 제외 · 미수집 —'));
   } else {
     cell.append(el('p', 'vl-mute', '지나간 해역 기록이 없습니다(이 기능을 넣기 전 항차이거나 해역을 바꾸지 않았습니다).'));
   }
@@ -180,9 +218,16 @@ function renderRows() {
   const rows = [];
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index];
-    const row = el('tr');
+    const row = el('tr', 'vl-record');
     row.append(el('td', 'vl-time', formatTimeRange(record.departedAt, record.arrivedAt)));
-    row.append(el('td', null, formatSeason(record)));
+    const seasonCell = el('td', 'vl-record-season');
+    const seasons = recordSeason(record);
+    const seasonIcons = el('span', 'vl-season-pair');
+    if (seasons.start && seasons.end && seasons.start !== seasons.end) {
+      seasonIcons.append(seasonIcon(seasons.start), document.createTextNode('→'), seasonIcon(seasons.end));
+    } else if (seasons.key) seasonIcons.append(seasonIcon(seasons.key));
+    else seasonIcons.textContent = '—';
+    seasonCell.append(seasonIcons); row.append(seasonCell);
     const route = el('td');
     const open = expanded.has(record.recordId);
     const detailId = detailIdOf(record.recordId);
@@ -210,6 +255,7 @@ function renderRows() {
     if (comparison.kind === 'diff' && comparison.diff < -0.05) tone = 'vl-faster';
     if (comparison.kind === 'diff' && comparison.diff > 0.05) tone = 'vl-slower';
     row.append(el('td', `vl-num ${tone}`, formatDiff(comparison)));
+    ['운행', '계절', '구간', '항해일수', '평균 속도', '이전 대비'].forEach((label, column) => { row.children[column].dataset.label = label; });
     rows.push(row);
     if (open) rows.push(renderDetail(record, detailId));
   }

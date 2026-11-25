@@ -30,6 +30,8 @@
 //     voyageIdle, idleBaseDistance, idleBaseElapsed }   같은 항차를 다시 열 때 평균 속도를 이어 재는 값(없으면 0·null)
 //   distance: 항차 이동 거리(월드 단위), straight: 출발·도착 거점 직선 거리, compare: 'auto' | 'include' | 'exclude'
 
+import { normalizeRegionStats } from './region-stats.js';
+
 export const MAX_RECORDS = 500;
 export const MAX_REGIONS = 64;
 /**
@@ -93,7 +95,8 @@ export function normalizeRegions(value) {
     const regionId = stringOrNull(item.regionId);
     const at = finiteOrNull(item.at);
     if (!regionId || at === null) continue;
-    out.push({ regionId, name: typeof item.name === 'string' ? item.name : '', at });
+    const stats = normalizeRegionStats(item.stats);
+    out.push({ regionId, name: typeof item.name === 'string' ? item.name : '', at, ...(stats ? { stats } : {}) });
   }
   return out.slice(-MAX_REGIONS);
 }
@@ -443,6 +446,7 @@ export function applyEvent(state, event, place = null) {
     case 'region.changed': {
       const regionId = stringOrNull(data.regionId);
       if (!current || !regionId) break;
+      if (current.regions?.at(-1)?.at > at) break;
       const regions = appendRegion(current.regions ?? [], {
         regionId,
         name: typeof data.name === 'string' ? data.name : '',
